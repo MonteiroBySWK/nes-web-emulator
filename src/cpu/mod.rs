@@ -11,6 +11,7 @@ pub mod cpu {
     const OVERFLOW: u8 = 0b0100_0000;
     const NEGATIVE: u8 = 0b1000_0000;
 
+    #[derive(Clone, Copy)]
     pub enum AddressingModes {
         ZeroPageIndexedX, // 2 bytes
         ZeroPageIndexedY, // 2 bytes
@@ -59,7 +60,8 @@ pub mod cpu {
     }
 
     type Opcode = u8;
-    type OpcodeFunction = (fn(&mut Cpu, AddressingModes), AddressingModes);
+    type Instrution = fn(&mut Cpu, AddressingModes);
+    type OpcodeFunction = (Instrution, AddressingModes);
     type InstructionMap = HashMap<Opcode, OpcodeFunction>; // Opcode, Instrution
 
     pub struct Cpu {
@@ -69,8 +71,8 @@ pub mod cpu {
     }
 
     impl Cpu {
-        fn new() -> Self {
-            Cpu {
+        pub fn new() -> Self {
+            let mut c = Cpu {
                 registers: Registers {
                     acc: 0,
                     index_x: 0,
@@ -81,7 +83,9 @@ pub mod cpu {
                 },
                 memory: [0; 65536],
                 instructions: HashMap::new(),
-            }
+            };
+            c.map_instructions();
+            c
         }
 
         fn map_instructions(&mut self) {
@@ -299,11 +303,19 @@ pub mod cpu {
             opcode
         }
 
-        fn decode(&mut self) {
+        fn decode(&mut self) -> Option<OpcodeFunction> {
             let opcode = self.fetch();
+            self.instructions.get(&opcode).copied()
         }
 
-        fn execute(&self, _opcode: u8) {}
+        fn execute(&mut self) {
+            let op_function: Option<OpcodeFunction> = self.decode();
+            if let Some((func, mode)) = op_function {
+                func(self, mode);
+            } else {
+                println!("Opcode not found");
+            }
+        }
 
         fn execute_mode(&self, mode: AddressingModes, value: u16) -> u8 {
             match mode {
