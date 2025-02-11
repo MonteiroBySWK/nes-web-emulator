@@ -87,7 +87,7 @@ pub mod cpu {
                 instructions: HashMap::new(),
             };
             c.map_instructions();   
-            c.registers.program_counter = c.turn_in_u16(c.memory[0xfffc], c.memory[0xfffd]);
+            
             c
         }
 
@@ -327,6 +327,8 @@ pub mod cpu {
                 }
             }
 
+            self.registers.program_counter = self.turn_in_u16(self.memory[0xfffc], self.memory[0xfffd]);
+
             Ok(())
         }
 
@@ -338,7 +340,7 @@ pub mod cpu {
 
         fn decode(&mut self) -> Option<OpcodeFunction> {
             let opcode = self.fetch();
-            println!("Fetched Opcode: 0x{:X}", opcode); 
+            println!("Fetched Opcode: 0x{:X} - PC: {}", opcode, self.registers.program_counter); 
             self.instructions.get(&opcode).copied()
         }
 
