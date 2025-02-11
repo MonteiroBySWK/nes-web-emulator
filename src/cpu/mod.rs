@@ -1,5 +1,7 @@
 pub mod cpu {
     use std::collections::HashMap;
+    use std::io::Error;
+    use std::fs;
 
     // Flags 0b NV1B DIZC
     const CARRY: u8 = 0b0000_0001;
@@ -84,7 +86,8 @@ pub mod cpu {
                 memory: [0; 65536],
                 instructions: HashMap::new(),
             };
-            c.map_instructions();
+            c.map_instructions();   
+            c.registers.program_counter = c.turn_in_u16(c.memory[0xfffc], c.memory[0xfffd]);
             c
         }
 
@@ -297,6 +300,36 @@ pub mod cpu {
             self.instructions.insert(0x98, (Cpu::tya, AddressingModes::Implicit));
         }
 
+        pub fn load_rom(&mut self, file_path: &str) -> Result<(), Error> {
+            let contents = fs::read(file_path)?;
+
+            if contents[0..4] != [0x4e, 0x45, 0x53, 0x1a] {
+                return Err(
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Arquivo NES inválido: cabeçalho incorreto"
+                    )
+                );
+            }
+
+            let prg_rom_size = contents[4] as usize * 16 * 1024;
+            let chr_rom_size = contents[5] as usize *8 * 1024;
+            let has_trainer = (contents[6] & 0b0000_0100) != 0;
+
+            let prg_rom_start = 16 + if has_trainer{512} else {0};
+            let prg_rom_data = &contents[prg_rom_start..(prg_rom_start+prg_rom_size)];
+
+            for (i, byte) in prg_rom_data.iter().enumerate() {
+                if 0x8000 + i < 65536 {
+                    self.memory[0x8000 + i] = *byte;
+                } else {
+                    break;
+                }
+            }
+
+            Ok(())
+        }
+
         fn fetch(&mut self) -> u8 {
             let opcode = self.memory[self.registers.program_counter as usize];
             self.registers.program_counter = self.registers.program_counter.wrapping_add(1);
@@ -305,59 +338,89 @@ pub mod cpu {
 
         fn decode(&mut self) -> Option<OpcodeFunction> {
             let opcode = self.fetch();
+            println!("Fetched Opcode: 0x{:X}", opcode); 
             self.instructions.get(&opcode).copied()
         }
 
-        fn execute(&mut self) {
+        pub fn execute(&mut self) {
             let op_function: Option<OpcodeFunction> = self.decode();
             if let Some((func, mode)) = op_function {
                 func(self, mode);
             } else {
-                println!("Opcode not found");
+//                println!("{:}", self.registers.program_counter);
             }
         }
 
-        fn execute_mode(&self, mode: AddressingModes, value: u16) -> u8 {
+        fn turn_in_u16(&self, low: u8, high:u8) -> u16 {
+            (high as u16) << 8 | low as u16
+        }
+
+        fn execute_mode(&mut self, mode: AddressingModes) -> u8 {
             match mode {
-                AddressingModes::Immediate => value as u8,
-                AddressingModes::ZeroPage => self.memory[value as usize],
+                AddressingModes::Immediate => {
+                    let value = self.fetch();
+                    value
+                },
+                AddressingModes::ZeroPage => {
+                    let address = self.fetch();
+                    self.memory[address as usize]
+                },
                 AddressingModes::ZeroPageIndexedX => {
-                    let val = (value as u8).wrapping_add(self.registers.index_x);
-                    self.memory[val as usize]
+                    let address = self.fetch();
+                    let indexed_address = address.wrapping_add(self.registers.index_x);
+                    
+                    self.memory[indexed_address as usize]
                 }
                 AddressingModes::ZeroPageIndexedY => {
-                    let val = (value as u8).wrapping_add(self.registers.index_y);
-                    self.memory[val as usize]
+                    let address = self.fetch();
+                    let indexed_address = address.wrapping_add(self.registers.index_y);
+                    
+                    self.memory[indexed_address as usize]
                 }
-                AddressingModes::Absolute => self.memory[value as usize],
+                AddressingModes::Absolute => {
+                    let low = self.fetch();
+                    let high = self.fetch();
+                    let address = self.turn_in_u16(low, high);
+                    
+                    self.memory[address as usize]
+                },
                 AddressingModes::AbsoluteIndexedX => {
-                    let val = value.wrapping_add(self.registers.index_x as u16);
-                    self.memory[val as usize]
+                    let low = self.fetch();
+                    let high = self.fetch();
+                    let address = self.turn_in_u16(low, high);
+                    let indexed_address = address.wrapping_add(self.registers.index_x as u16);
+                    
+                    self.memory[indexed_address as usize]
                 }
                 AddressingModes::AbsoluteIndexedY => {
-                    let val = value.wrapping_add(self.registers.index_y as u16);
-                    self.memory[val as usize]
+                    let low = self.fetch();
+                    let high = self.fetch();
+                    let address = self.turn_in_u16(low, high);
+                    let indexed_address = address.wrapping_add(self.registers.index_y as u16);
+                    
+                    self.memory[indexed_address as usize]
                 }
                 // Corrigir com wrapping_add
                 AddressingModes::IndexedIndirect => {
-                    let val_1 = ((value as u8) + self.registers.index_x) % 255;
-                    let peek_1 = self.memory[val_1 as usize];
-
-                    let val_2 = ((value as u8) + self.registers.index_x + 1) % 255;
-                    let peek_2 = self.memory[val_2 as usize];
-
-                    let val = (peek_1 + peek_2) * 255;
-
-                    self.memory[val as usize]
+                    let address = self.fetch();
+                    let indexed_address = address.wrapping_add(self.registers.index_x);
+                
+                    let low = self.memory[address as usize];
+                    let high = self.memory[address.wrapping_add(1) as usize];
+                    let indirect_address = self.turn_in_u16(low, high);
+                    
+                    self.memory[indirect_address as usize]
                 }
                 AddressingModes::IndirectIndexed => {
-                    let peek_1 = self.memory[value as usize];
+                    let indirect_base_address = self.fetch();
 
-                    let val_1 = (((value as u8) + 1) % 255) * 255 + self.registers.index_y;
-                    let peek_2 = self.memory[val_1 as usize];
-
-                    let val = peek_1 + peek_2;
-                    self.memory[val as usize]
+                    let low = self.memory[indirect_base_address as usize];
+                    let high = self.memory[indirect_base_address.wrapping_add(1) as usize]; 
+                    let indirect_address = self.turn_in_u16(low, high);
+                    
+                    let indexed_address = indirect_address.wrapping_add(self.registers.index_y as u16);
+                    
+                    self.memory[indexed_address as usize]
                 }
                 _ => 0,
             }
@@ -367,7 +430,7 @@ pub mod cpu {
     impl Cpu {
         // Access
         fn lda(&mut self, mode: AddressingModes) {
-            let value = 0;
+            let value = self.memory[self.registers.program_counter as usize] as u16;
             /*
                Esse value tem que vir da memoria
                LDA #$45
@@ -382,7 +445,7 @@ pub mod cpu {
                Byte 3 = self.memory[2] -> Pode ser o proximo opcode ou Mais um operando
             */
 
-            let value_for_acc = self.execute_mode(mode, value);
+            let value_for_acc = self.execute_mode(mode);
             self.registers.acc = value_for_acc;
 
             /* Tem que melhorar esses sets de flags */
@@ -400,36 +463,35 @@ pub mod cpu {
         }
 
         fn sta(&mut self, mode: AddressingModes) {
-            let value = 0;
-            let value_for_memory = self.execute_mode(mode, value);
+            let value = self.memory[self.registers.program_counter as usize] as u16;
+            let value_for_memory = self.execute_mode(mode);
             self.memory[value_for_memory as usize] = self.registers.acc;
         }
 
         fn ldx(&mut self, mode: AddressingModes) {
-            let value = 0;
-            let value_for_x = self.execute_mode(mode, value);
-
+            let value = self.memory[self.registers.program_counter as usize] as u16;
+            let value_for_x = self.execute_mode(mode);
             self.registers.index_x = value_for_x;
             // Zero e Negative
         }
 
         fn stx(&mut self, mode: AddressingModes) {
-            let value = 0;
-            let value_for_memory = self.execute_mode(mode, value);
+            let value = self.memory[self.registers.program_counter as usize] as u16;
+            let value_for_memory = self.execute_mode(mode);
             self.memory[value_for_memory as usize] = self.registers.index_x;
         }
 
         fn ldy(&mut self, mode: AddressingModes) {
-            let value = 0;
-            let value_for_y = self.execute_mode(mode, value);
+            let value = self.memory[self.registers.program_counter as usize] as u16;
+            let value_for_y = self.execute_mode(mode);
             self.registers.index_y = value_for_y;
 
             // Zero e Negative
         }
 
         fn sty(&mut self, mode: AddressingModes) {
-            let value = 0;
-            let value_for_memory = self.execute_mode(mode, value);
+            let value = self.memory[self.registers.program_counter as usize] as u16;
+            let value_for_memory = self.execute_mode(mode);
             self.memory[value_for_memory as usize] = value_for_memory;
         }
 
@@ -505,28 +567,16 @@ pub mod cpu {
 
         // Flags
         fn clc(&mut self, mode: AddressingModes) {
-            // Clear Carry
             self.registers.status_register |= !CARRY;
         }
         fn sec(&mut self, mode: AddressingModes) {
-            // Set Carry
             self.registers.status_register ^= CARRY;
         }
-        fn cli(&mut self, mode: AddressingModes) {
-            // Clear Interrupt Disable
-        }
-        fn sei(&mut self, mode: AddressingModes) {
-            // Set Interrupt Disable
-        }
-        fn cld(&mut self, mode: AddressingModes) {
-            // Clear Decimal
-        }
-        fn sed(&mut self, mode: AddressingModes) {
-            // Set Decimal
-        }
-        fn clv(&mut self, mode: AddressingModes) {
-            //Clear Overflow
-        }
+        fn cli(&mut self, mode: AddressingModes) {}
+        fn sei(&mut self, mode: AddressingModes) {}
+        fn cld(&mut self, mode: AddressingModes) {}
+        fn sed(&mut self, mode: AddressingModes) {}
+        fn clv(&mut self, mode: AddressingModes) {}
 
         // Other
         fn nop(&mut self, mode: AddressingModes) {}
