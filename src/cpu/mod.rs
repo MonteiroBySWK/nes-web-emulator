@@ -52,6 +52,16 @@ pub mod cpu {
         }
     }
 
+    pub enum FlagUpdate {
+        Zero(u8),
+        Negative(u8),
+        Carry(bool),
+        Overflow(bool),
+        InterruptDisable(bool),
+        Decimal(bool),
+        Break(bool),
+    }
+
     struct Registers {
         acc: u8, //A
         index_x: u8, //X
@@ -74,7 +84,7 @@ pub mod cpu {
 
     impl Cpu {
         pub fn new() -> Self {
-            let mut c = Cpu {
+            let mut c: Cpu = Cpu {
                 registers: Registers {
                     acc: 0,
                     index_x: 0,
@@ -86,8 +96,8 @@ pub mod cpu {
                 memory: [0; 65536],
                 instructions: HashMap::new(),
             };
-            c.map_instructions();   
-            
+            c.map_instructions();
+
             c
         }
 
@@ -301,7 +311,7 @@ pub mod cpu {
         }
 
         pub fn load_rom(&mut self, file_path: &str) -> Result<(), Error> {
-            let contents = fs::read(file_path)?;
+            let contents: Vec<u8> = fs::read(file_path)?;
 
             if contents[0..4] != [0x4e, 0x45, 0x53, 0x1a] {
                 return Err(
@@ -312,12 +322,12 @@ pub mod cpu {
                 );
             }
 
-            let prg_rom_size = contents[4] as usize * 16 * 1024;
-            let chr_rom_size = contents[5] as usize *8 * 1024;
-            let has_trainer = (contents[6] & 0b0000_0100) != 0;
+            let prg_rom_size: usize = (contents[4] as usize) * 16 * 1024;
+            let _chr_rom_size: usize = (contents[5] as usize) * 8 * 1024;
+            let has_trainer: bool = (contents[6] & 0b0000_0100) != 0;
 
-            let prg_rom_start = 16 + if has_trainer{512} else {0};
-            let prg_rom_data = &contents[prg_rom_start..(prg_rom_start+prg_rom_size)];
+            let prg_rom_start: usize = 16 + (if has_trainer { 512 } else { 0 });
+            let prg_rom_data: &[u8] = &contents[prg_rom_start..prg_rom_start + prg_rom_size];
 
             for (i, byte) in prg_rom_data.iter().enumerate() {
                 if 0x8000 + i < 65536 {
@@ -327,20 +337,23 @@ pub mod cpu {
                 }
             }
 
-            self.registers.program_counter = self.turn_in_u16(self.memory[0xfffc], self.memory[0xfffd]);
+            self.registers.program_counter = self.turn_in_u16(
+                self.memory[0xfffc],
+                self.memory[0xfffd]
+            );
 
             Ok(())
         }
 
         fn fetch(&mut self) -> u8 {
-            let opcode = self.memory[self.registers.program_counter as usize];
+            let opcode: u8 = self.memory[self.registers.program_counter as usize];
             self.registers.program_counter = self.registers.program_counter.wrapping_add(1);
             opcode
         }
 
         fn decode(&mut self) -> Option<OpcodeFunction> {
-            let opcode = self.fetch();
-            println!("Fetched Opcode: 0x{:X} - PC: {}", opcode, self.registers.program_counter); 
+            let opcode: u8 = self.fetch();
+            println!("Fetched Opcode: 0x{:X} - PC: {}", opcode, self.registers.program_counter);
             self.instructions.get(&opcode).copied()
         }
 
@@ -349,82 +362,140 @@ pub mod cpu {
             if let Some((func, mode)) = op_function {
                 func(self, mode);
             } else {
-//                println!("{:}", self.registers.program_counter);
+                println!("Opcode not found");
             }
         }
 
-        fn turn_in_u16(&self, low: u8, high:u8) -> u16 {
-            (high as u16) << 8 | low as u16
+        fn turn_in_u16(&self, low: u8, high: u8) -> u16 {
+            ((high as u16) << 8) | (low as u16)
         }
 
         fn execute_mode(&mut self, mode: AddressingModes) -> u8 {
             match mode {
                 AddressingModes::Immediate => {
-                    let value = self.fetch();
+                    let value: u8 = self.fetch();
                     value
-                },
+                }
                 AddressingModes::ZeroPage => {
-                    let address = self.fetch();
+                    let address: u8 = self.fetch();
                     self.memory[address as usize]
-                },
+                }
                 AddressingModes::ZeroPageIndexedX => {
-                    let address = self.fetch();
-                    let indexed_address = address.wrapping_add(self.registers.index_x);
-                    
+                    let address: u8 = self.fetch();
+                    let indexed_address: u8 = address.wrapping_add(self.registers.index_x);
+
                     self.memory[indexed_address as usize]
                 }
                 AddressingModes::ZeroPageIndexedY => {
-                    let address = self.fetch();
-                    let indexed_address = address.wrapping_add(self.registers.index_y);
-                    
+                    let address: u8 = self.fetch();
+                    let indexed_address: u8 = address.wrapping_add(self.registers.index_y);
+
                     self.memory[indexed_address as usize]
                 }
                 AddressingModes::Absolute => {
-                    let low = self.fetch();
-                    let high = self.fetch();
-                    let address = self.turn_in_u16(low, high);
-                    
+                    let low: u8 = self.fetch();
+                    let high: u8 = self.fetch();
+                    let address: u16 = self.turn_in_u16(low, high);
+
                     self.memory[address as usize]
-                },
+                }
                 AddressingModes::AbsoluteIndexedX => {
-                    let low = self.fetch();
-                    let high = self.fetch();
-                    let address = self.turn_in_u16(low, high);
-                    let indexed_address = address.wrapping_add(self.registers.index_x as u16);
-                    
+                    let low: u8 = self.fetch();
+                    let high: u8 = self.fetch();
+                    let address: u16 = self.turn_in_u16(low, high);
+                    let indexed_address: u16 = address.wrapping_add(self.registers.index_x as u16);
+
                     self.memory[indexed_address as usize]
                 }
                 AddressingModes::AbsoluteIndexedY => {
-                    let low = self.fetch();
-                    let high = self.fetch();
-                    let address = self.turn_in_u16(low, high);
-                    let indexed_address = address.wrapping_add(self.registers.index_y as u16);
-                    
+                    let low: u8 = self.fetch();
+                    let high: u8 = self.fetch();
+                    let address: u16 = self.turn_in_u16(low, high);
+                    let indexed_address: u16 = address.wrapping_add(self.registers.index_y as u16);
+
                     self.memory[indexed_address as usize]
                 }
-                // Corrigir com wrapping_add
                 AddressingModes::IndexedIndirect => {
-                    let address = self.fetch();
-                    let indexed_address = address.wrapping_add(self.registers.index_x);
-                
-                    let low = self.memory[address as usize];
-                    let high = self.memory[address.wrapping_add(1) as usize];
-                    let indirect_address = self.turn_in_u16(low, high);
-                    
+                    let address: u8 = self.fetch();
+                    let indexed_address: u8 = address.wrapping_add(self.registers.index_x);
+
+                    let low: u8 = self.memory[indexed_address as usize];
+                    let high: u8 = self.memory[indexed_address.wrapping_add(1) as usize];
+                    let indirect_address: u16 = self.turn_in_u16(low, high);
+
                     self.memory[indirect_address as usize]
                 }
                 AddressingModes::IndirectIndexed => {
-                    let indirect_base_address = self.fetch();
+                    let indirect_base_address: u8 = self.fetch();
 
-                    let low = self.memory[indirect_base_address as usize];
-                    let high = self.memory[indirect_base_address.wrapping_add(1) as usize]; 
-                    let indirect_address = self.turn_in_u16(low, high);
-                    
-                    let indexed_address = indirect_address.wrapping_add(self.registers.index_y as u16);
-                    
+                    let low: u8 = self.memory[indirect_base_address as usize];
+                    let high: u8 = self.memory[indirect_base_address.wrapping_add(1) as usize];
+                    let indirect_address: u16 = self.turn_in_u16(low, high);
+
+                    let indexed_address: u16 = indirect_address.wrapping_add(
+                        self.registers.index_y as u16
+                    );
+
                     self.memory[indexed_address as usize]
                 }
                 _ => 0,
+            }
+        }
+
+        fn update_flags(&mut self, updates: &[FlagUpdate]) {
+            for update in updates {
+                match *update {
+                    FlagUpdate::Zero(val) => {
+                        if val == 0 {
+                            self.registers.status_register |= ZERO;
+                        } else {
+                            self.registers.status_register &= !ZERO;
+                        }
+                    }
+                    FlagUpdate::Negative(val) => {
+                        // For 6502, the negative flag is set if the most significant bit is 1.
+                        if (val & 0x80) != 0 {
+                            self.registers.status_register |= NEGATIVE;
+                        } else {
+                            self.registers.status_register &= !NEGATIVE;
+                        }
+                    }
+                    FlagUpdate::Carry(flag) => {
+                        if flag {
+                            self.registers.status_register |= CARRY;
+                        } else {
+                            self.registers.status_register &= !CARRY;
+                        }
+                    }
+                    FlagUpdate::Overflow(flag) => {
+                        if flag {
+                            self.registers.status_register |= OVERFLOW;
+                        } else {
+                            self.registers.status_register &= !OVERFLOW;
+                        }
+                    }
+                    FlagUpdate::InterruptDisable(flag) => {
+                        if flag {
+                            self.registers.status_register |= INTERRUPT_DISABLE;
+                        } else {
+                            self.registers.status_register &= !INTERRUPT_DISABLE;
+                        }
+                    }
+                    FlagUpdate::Decimal(flag) => {
+                        if flag {
+                            self.registers.status_register |= DECIMAL;
+                        } else {
+                            self.registers.status_register &= !DECIMAL;
+                        }
+                    }
+                    FlagUpdate::Break(flag) => {
+                        if flag {
+                            self.registers.status_register |= BREAK;
+                        } else {
+                            self.registers.status_register &= !BREAK;
+                        }
+                    }
+                }
             }
         }
     }
@@ -432,68 +503,39 @@ pub mod cpu {
     impl Cpu {
         // Access
         fn lda(&mut self, mode: AddressingModes) {
-            let value = self.memory[self.registers.program_counter as usize] as u16;
-            /*
-               Esse value tem que vir da memoria
-               LDA #$45
-               <LDA #$> <45>
-
-               <LDA #$> -> OPCODE XYZ -> Função + Modo
-               <45> -> OPERANDO ; O modo define como esse operando vai ser tratado
-
-               Ex:
-               Byte 1 = self.memory[0] -> Tem o Opcode = Função + Modo
-               Byte 2 = self.memory[1] -> Tem o Operando
-               Byte 3 = self.memory[2] -> Pode ser o proximo opcode ou Mais um operando
-            */
-
-            let value_for_acc = self.execute_mode(mode);
+            let value_for_acc: u8 = self.execute_mode(mode);
             self.registers.acc = value_for_acc;
 
-            /* Tem que melhorar esses sets de flags */
-            if value_for_acc == 0 {
-                self.registers.status_register |= ZERO;
-            } else {
-                self.registers.status_register &= !ZERO;
-            }
-
-            if (value_for_acc & NEGATIVE) == 0 {
-                self.registers.status_register |= NEGATIVE;
-            } else {
-                self.registers.status_register &= !NEGATIVE;
-            }
+            self.update_flags(
+                &[FlagUpdate::Zero(value_for_acc), FlagUpdate::Negative(value_for_acc)]
+            );
         }
 
         fn sta(&mut self, mode: AddressingModes) {
-            let value = self.memory[self.registers.program_counter as usize] as u16;
-            let value_for_memory = self.execute_mode(mode);
+            let value_for_memory: u8 = self.execute_mode(mode);
             self.memory[value_for_memory as usize] = self.registers.acc;
         }
 
         fn ldx(&mut self, mode: AddressingModes) {
-            let value = self.memory[self.registers.program_counter as usize] as u16;
-            let value_for_x = self.execute_mode(mode);
+            let value_for_x: u8 = self.execute_mode(mode);
             self.registers.index_x = value_for_x;
             // Zero e Negative
         }
 
         fn stx(&mut self, mode: AddressingModes) {
-            let value = self.memory[self.registers.program_counter as usize] as u16;
-            let value_for_memory = self.execute_mode(mode);
+            let value_for_memory: u8 = self.execute_mode(mode);
             self.memory[value_for_memory as usize] = self.registers.index_x;
         }
 
         fn ldy(&mut self, mode: AddressingModes) {
-            let value = self.memory[self.registers.program_counter as usize] as u16;
-            let value_for_y = self.execute_mode(mode);
+            let value_for_y: u8 = self.execute_mode(mode);
             self.registers.index_y = value_for_y;
 
             // Zero e Negative
         }
 
         fn sty(&mut self, mode: AddressingModes) {
-            let value = self.memory[self.registers.program_counter as usize] as u16;
-            let value_for_memory = self.execute_mode(mode);
+            let value_for_memory: u8 = self.execute_mode(mode);
             self.memory[value_for_memory as usize] = value_for_memory;
         }
 
@@ -532,9 +574,18 @@ pub mod cpu {
         fn ror(&mut self, mode: AddressingModes) {}
 
         // Bitwise
-        fn and(&mut self, mode: AddressingModes) {}
-        fn ora(&mut self, mode: AddressingModes) {}
-        fn eor(&mut self, mode: AddressingModes) {}
+        fn and(&mut self, mode: AddressingModes) {
+            let value_for_acc = self.execute_mode(mode);
+            self.registers.acc &= value_for_acc;
+        }
+        fn ora(&mut self, mode: AddressingModes) {
+            let value_for_acc = self.execute_mode(mode);
+            self.registers.acc |= value_for_acc;
+        }
+        fn eor(&mut self, mode: AddressingModes) {
+            let value_for_acc = self.execute_mode(mode);
+            self.registers.acc ^= value_for_acc;
+        }
         fn bit(&mut self, mode: AddressingModes) {}
 
         // Compare
@@ -553,7 +604,10 @@ pub mod cpu {
         fn bvs(&mut self, mode: AddressingModes) {}
 
         // Jump
-        fn jmp(&mut self, mode: AddressingModes) {}
+        fn jmp(&mut self, mode: AddressingModes) {
+            let value_for_program_counter = self.execute_mode(mode);
+            self.registers.program_counter = value_for_program_counter as u16;
+        }
         fn jsr(&mut self, mode: AddressingModes) {}
         fn rts(&mut self, mode: AddressingModes) {}
         fn brk(&mut self, mode: AddressingModes) {}
