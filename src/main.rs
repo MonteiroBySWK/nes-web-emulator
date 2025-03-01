@@ -1,5 +1,11 @@
+use std::{fs, num::ParseIntError};
 mod cpu;
+use cpu::Cpu;
 
 fn main() {
-    println!("Hello, world!");
+    let mut chip = Cpu::new();
+    chip.load_rom("Zelda.nes").unwrap();
+    loop {
+     chip.execute();
+    }
 }
