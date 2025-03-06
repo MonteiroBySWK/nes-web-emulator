@@ -1,11 +1,15 @@
-use std::{fs, num::ParseIntError};
 mod cpu;
-use cpu::Cpu;
+mod rom;
+
+mod memory;
+mod ppu;
+mod apu;
+mod emulator;
+
+use emulator::run;
 
 fn main() {
-    let mut chip = Cpu::new();
-    chip.load_rom("Zelda.nes").unwrap();
-    loop {
-     chip.execute();
-    }
+    let rom_path = "Zelda.nes";
+
+    run(rom_path);
 }
