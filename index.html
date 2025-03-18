@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>NES Emulator</title>
+    <link rel="icon" type="image/x-icon" href="web/favicon.ico" />
+    <meta
+      name="description"
+      content="NES Emulator written in Rust and compiled to WebAssembly"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="web/style.css" />
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  </head>
+  <body class="bg-[#0d0126] box-sizing">
+    <div class="w-full flex gap-5 text-white items-center">
+      <canvas
+        id="nes-screen"
+        width="256"
+        height="240"
+        class="border-[#6d33a6] border h-full w-1/2"
+      ></canvas>
+      <div class="flex flex-col gap-5 w-1/2">
+        <div class="bg-[#6d33a6] p-4 rounded w-full">
+          <p>CPU</p>
+          <p>Registers</p>
+          <p>A: <span id="regA">value</span></p>
+          <p>X: <span id="regX">value</span></p>
+          <p>Y: <span id="regY">value</span></p>
+          <p>PC: <span id="regPC">value</span></p>
+          <p>S: <span id="regS">value</span></p>
+          <p>P: <span id="regP">value</span></p>
+        </div>
+        <div id="debug"></div>
+        <input
+          type="file"
+          id="rom-input"
+          accept=".nes"
+          class="block w-full text-sm border border-gray-300 rounded px-4 py-1 cursor-pointer bg-[#6d33a6] focus:outline-none"
+        />
+      </div>
+    </div>
+    <script type="module" src="web/script.js"></script>
+  </body>
+</html>
