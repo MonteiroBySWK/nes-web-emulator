@@ -1,115 +1,170 @@
-use std::io::Error;
+use std::io::{Error, ErrorKind};
 use std::fs;
-use std::ptr::addr_eq;
+use std::path::Path;
+use crate::mapper::{Mapper, Mapper0, Mapper1};
 
 pub struct ROM {
-    pub chr_rom: Vec<u8>, // Gráfico 0x0000 - 0x1FFF
-    pub prg_rom: Vec<u8>, // Codigo 0x8000 - 0xFFFF
-    // mapper: Box<dyn Mapper>,
+    pub header: Vec<u8>,
+    pub mapper: Box<dyn Mapper>,
+    pub mirroring: Mirroring,
+    pub battery_backed: bool,
+    pub mapper_number: u8,
 }
 
-pub trait Mapper {
-    fn read_prg(&self, address: u16) -> u8;
-    fn write_prg(&mut self, address: u16, value: u8);
-    fn read_chr(&self, address: u16) -> u8;
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Mirroring {
+    Horizontal,
+    Vertical,
+    OneScreenLo,
+    OneScreenHi,
+    FourScreen,
 }
 
 impl ROM {
-    pub fn new(rom_path: &str) -> Result<ROM, Error> {
+    pub fn new<P: AsRef<Path>>(rom_path: P) -> Result<ROM, Error> {
         let contents: Vec<u8> = fs::read(rom_path)?;
+        Self::from_bytes(&contents)
+    }
 
-        if contents[0..4] != [0x4e, 0x45, 0x53, 0x1a] {
-            return Err(
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Arquivo NES inválido: cabeçalho incorreto"
+    pub fn from_bytes(contents: &[u8]) -> Result<ROM, Error> {
+        // Log ROM size and header for debugging
+        web_sys::console::log_1(&format!(
+            "Loading ROM - Size: {}, Header: {:?}",
+            contents.len(),
+            &contents[0..16].iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>()
+        ).into());
+
+        // Verify minimum size and iNES header
+        if contents.len() < 16 || &contents[0..4] != b"NES\x1A" {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "Invalid iNES header"
+            ));
+        }
+
+        let header = contents[0..16].to_vec();
+        let prg_rom_size = contents[4] as usize * 16384;
+        let chr_rom_size = contents[5] as usize * 8192;
+
+        // Get mapper number and flags
+        let mapper_number = (contents[6] >> 4) | (contents[7] & 0xF0);
+        let vertical_mirroring = (contents[6] & 0x01) != 0;
+        let battery_backed = (contents[6] & 0x02) != 0;
+        let has_trainer = (contents[6] & 0x04) != 0;
+        let four_screen = (contents[6] & 0x08) != 0;
+
+        // Log detailed ROM info
+        web_sys::console::log_1(&format!(
+            "ROM Info - PRG: {}KB, CHR: {}KB, Mapper: {}, Flags: v={} b={} t={} f={}",
+            prg_rom_size / 1024,
+            chr_rom_size / 1024,
+            mapper_number,
+            vertical_mirroring,
+            battery_backed,
+            has_trainer,
+            four_screen
+        ).into());
+
+        // Calculate offsets and verify size
+        let header_size = 16 + if has_trainer { 512 } else { 0 };
+        web_sys::console::log_1(&format!("Header Size: {}", header_size).into());
+        let expected_size = header_size + prg_rom_size + chr_rom_size;
+        if contents.len() < expected_size {
+            return Err(Error::new(
+                ErrorKind::UnexpectedEof,
+                format!(
+                    "ROM too small. Expected {}, got {}",
+                    expected_size,
+                    contents.len()
                 )
-            );
+            ));
         }
 
-        const KB_SIZE: usize = 1024;
+        // Extract PRG-ROM (with bounds checking)
+        let prg_rom_start = header_size;
+        let prg_rom_end = prg_rom_start + prg_rom_size;
+        web_sys::console::log_1(&format!("PRG ROM Start: {}, End: {}", prg_rom_start, prg_rom_end).into());
+        if prg_rom_end > contents.len() {
+            return Err(Error::new(
+                ErrorKind::UnexpectedEof,
+                format!("PRG ROM ends at {}, but ROM size is {}", prg_rom_end, contents.len())
+            ));
+        }
+        let prg_rom = contents[prg_rom_start..prg_rom_end].to_vec();
+        web_sys::console::log_1(&format!("PRG ROM Size: {}", prg_rom.len()).into());
 
-        let prg_rom_size: usize = (contents[4] as usize) * 16 * KB_SIZE;
-        let chr_rom_size: usize = (contents[5] as usize) * 8 * KB_SIZE;
-
-        // 6 - 10 são flags
-
-        // Flag 6
-        let vertical_mirroring: bool = (contents[6] & 0b0000_0001) != 0;
-        let battery_backed: bool = (contents[6] & 0b0000_0010) != 0;
-        let has_trainer: bool = (contents[6] & 0b0000_0100) != 0;
-        let four_screen_vram: bool = (contents[6] & 0b0000_1000) != 0;
-        let mapper_number: u8 = (contents[6] >> 4) | (contents[7] & 0xf0);
-
-        // Flag 7
-        let vs_unisystem: bool = (contents[7] & 0b0000_0001) != 0;
-        let playchoice_10: bool = (contents[7] & 0b0000_0010) != 0;
-        let nes_2_0: bool = (contents[7] & 0b0000_1100) == 0b0000_1000;
-
-        // Flag 8
-        let prg_ram_size: u8 = contents[8];
-
-        // Flag 9
-        let tv_system: bool = (contents[9] & 0b0000_0001) != 0;
-
-        // Flag 10
-        // (bits 0-1) TV system
-        // (bit 2) PRG RAM ($6000-$7FFF) (0: present; 1: not present)
-        // (bit 4) Bus conflicts (0: no conflicts; 1: conflicts)
-        let prg_ram_present: bool = (contents[10] & 0b0000_0100) == 0;
-        let bus_conflicts: bool = (contents[10] & 0b0001_0000) != 0;
-
-        let chr_rom: Vec<u8>;
-        if chr_rom_size == 0 {
-            chr_rom = vec![0; 8 * KB_SIZE]; //CHR_RAM
+        // Create CHR-ROM/RAM
+        let chr_rom = if chr_rom_size == 0 {
+            web_sys::console::log_1(&"CHR ROM Size is 0, creating CHR RAM".into());
+            vec![0; 8192] // 8KB of CHR-RAM
         } else {
-            let chr_rom_start: usize = 16 + prg_rom_size + (if has_trainer { 512 } else { 0 });
-            chr_rom = contents[chr_rom_start..chr_rom_start + chr_rom_size].to_vec();
-        }
+            let chr_rom_start = prg_rom_end;
+            let chr_rom_end = chr_rom_start + chr_rom_size;
+            web_sys::console::log_1(&format!("CHR ROM Start: {}, End: {}", chr_rom_start, chr_rom_end).into());
+            if chr_rom_end > contents.len() {
+                return Err(Error::new(
+                    ErrorKind::UnexpectedEof,
+                    format!("CHR ROM ends at {}, but ROM size is {}", chr_rom_end, contents.len())
+                ));
+            }
+            let chr_rom = contents[chr_rom_start..chr_rom_end].to_vec();
+            web_sys::console::log_1(&format!("CHR ROM Size: {}", chr_rom.len()).into());
+            chr_rom
+        };
 
-        let prg_rom_start: usize = 16 + (if has_trainer { 512 } else { 0 });
-        let prg_rom = contents[prg_rom_start..prg_rom_start + prg_rom_size].to_vec();
-
-        // Imprime as variáveis, exceto os vetores
-        let debug: bool = true;
-        if debug {
-            println!("vertical_mirroring: {}", vertical_mirroring);
-            println!("battery_backed: {}", battery_backed);
-            println!("trainer_present: {}", has_trainer);
-            println!("four_screen_vram: {}", four_screen_vram);
-            println!("mapper_number: {}", mapper_number);
-            println!("vs_unisystem: {}", vs_unisystem);
-            println!("playchoice_10: {}", playchoice_10);
-            println!("nes_2_0: {}", nes_2_0);
-            println!("prg_ram_size: {}", prg_ram_size);
-            println!("tv_system: {}", tv_system);
-            println!("prg_ram_present: {}", prg_ram_present);
-            println!("bus_conflicts: {}", bus_conflicts);
-        }
-        // For now, defaulting to Mapper0
-        // let mapper = Box::new(Mapper0 {});
+        // Determine mirroring type
+        let mirroring = if four_screen {
+            Mirroring::FourScreen
+        } else if vertical_mirroring {
+            Mirroring::Vertical
+        } else {
+            Mirroring::Horizontal
+        };
 
         Ok(ROM {
-            prg_rom,
-            chr_rom,
-            //  mapper,
+            header: contents[0..16].to_vec(),
+            mapper: match mapper_number {
+                0 => Box::new(Mapper0::new(
+                    prg_rom,
+                    chr_rom,
+                    contents[4],
+                    contents[5],
+                    mirroring
+                )),
+                1 => Box::new(Mapper1::new(
+                    prg_rom,
+                    chr_rom,
+                    contents[4],
+                    contents[5]
+                )),
+                _ => return Err(Error::new(
+                    ErrorKind::Unsupported,
+                    format!("Unsupported mapper: {}", mapper_number)
+                )),
+            },
+            mirroring,
+            battery_backed,
+            mapper_number,
         })
     }
 
     pub fn read(&self, address: u16) -> u8 {
-        let addr = address as usize - 0x8000;
-        if addr < self.prg_rom.len() {
-            self.prg_rom[addr]
-        } else {
-            0
-        }
+        self.mapper.read_prg(address)
     }
 
+    pub fn write(&mut self, address: u16, value: u8) {
+        self.mapper.write_prg(address, value);
+    }
 
+    pub fn read_chr(&self, address: u16) -> u8 {
+        self.mapper.read_chr(address)
+    }
+
+    pub fn write_chr(&mut self, address: u16, value: u8) {
+        self.mapper.write_chr(address, value);
+    }
+
+    pub fn get_mirroring(&self) -> Mirroring {
+        self.mapper.get_mirroring()
+    }
 }
-
-struct Mapper0 {}
-impl Mapper0 {}
-
-struct Mapper1 {}
-impl Mapper1 {}

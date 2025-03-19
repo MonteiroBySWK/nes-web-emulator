@@ -1,4 +1,4 @@
-impl<'a> CPU<'a> {
+impl CPU {
     fn map_instructions(&mut self) {
         // ADC
         self.instructions.insert(0x69, (CPU::adc, AddressingModes::Immediate));
@@ -106,6 +106,7 @@ impl<'a> CPU<'a> {
         self.instructions.insert(0xa9, (CPU::lda, AddressingModes::Immediate));
         self.instructions.insert(0xa5, (CPU::lda, AddressingModes::ZeroPage));
         self.instructions.insert(0xb5, (CPU::lda, AddressingModes::ZeroPageIndexedX));
+        self.instructions.insert(0xad, (CPU::lda, AddressingModes::Absolute));
         self.instructions.insert(0xbd, (CPU::lda, AddressingModes::AbsoluteIndexedX));
         self.instructions.insert(0xb9, (CPU::lda, AddressingModes::AbsoluteIndexedY));
         self.instructions.insert(0xa1, (CPU::lda, AddressingModes::IndexedIndirect));
@@ -206,5 +207,25 @@ impl<'a> CPU<'a> {
         self.instructions.insert(0x9a, (CPU::txs, AddressingModes::Implicit));
         // TYA
         self.instructions.insert(0x98, (CPU::tya, AddressingModes::Implicit));
+
+        // Insert a NOP instruction: opcode 0xEA
+        self.instructions.insert(0xea, (
+            |_cpu, _mode| {
+                // NOP does nothing
+            },
+            AddressingModes::Implicit,
+        ));
+
+        // Optionally, handle BRK (opcode 0x00) as a basic interrupt simulation
+        self.instructions.insert(0x00, (
+            |cpu, _mode| {
+                cpu.push_u16(cpu.registers.program_counter);
+                let status = cpu.registers.status_register & !BREAK;
+                cpu.push(status);
+                cpu.registers.program_counter = cpu.read_u16(0xfffe);
+                cpu.registers.status_register |= INTERRUPT_DISABLE;
+            },
+            AddressingModes::Implicit,
+        ));
     }
 }
