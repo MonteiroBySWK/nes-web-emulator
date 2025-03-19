@@ -12,7 +12,7 @@
     <link rel="stylesheet" href="web/style.css" />
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
   </head>
-  <body class="bg-[#0d0126] box-sizing">
+  <body class="bg-[#0d0126] box-sizing font-mono">
     <div class="w-full flex gap-5 text-white items-center">
       <canvas
         id="nes-screen"
@@ -21,16 +21,29 @@
         class="border-[#6d33a6] border h-full w-1/2"
       ></canvas>
       <div class="flex flex-col gap-5 w-1/2">
-        <div class="bg-[#6d33a6] p-4 rounded w-full">
-          <p>CPU</p>
-          <p>Registers</p>
-          <p>A: <span id="regA">value</span></p>
-          <p>X: <span id="regX">value</span></p>
-          <p>Y: <span id="regY">value</span></p>
-          <p>PC: <span id="regPC">value</span></p>
-          <p>S: <span id="regS">value</span></p>
-          <p>P: <span id="regP">value</span></p>
+        <div class="flex gap-5">
+          <div class="bg-[#6d33a6] p-4 rounded w-full">
+            <p>CPU</p>
+            <p>A: <span id="regA">0</span></p>
+            <p>X: <span id="regX">0</span></p>
+            <p>Y: <span id="regY">0</span></p>
+            <p>PC: <span id="regPC">0</span></p>
+            <p>S: <span id="regS">0</span></p>
+            <p>P: <span id="regP">0</span></p>
+          </div>
+
+          <div class="bg-[#6d33a6] p-4 rounded w-full">
+            <p>PPU</p>
+            <p>CTRL: <span id="regPPUCTRL">00</span></p>
+            <p>MASK: <span id="regPPUMASK">00</span></p>
+            <p>STATUS: <span id="regPPUSTATUS">00</span></p>
+            <p>OAM ADDR: <span id="regOAMADDR">00</span></p>
+            <p>SCROLL: <span id="regPPUSCROLL">00</span></p>
+            <p>ADDR: <span id="regPPUADDR">00</span></p>
+            <p>ADDR FULL: <span id="regPPUADDRFULL">0000</span></p>
         </div>
+        </div>
+
         <div id="debug"></div>
         <input
           type="file"

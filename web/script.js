@@ -108,11 +108,38 @@ function gameLoop() {
 }
 
 function updateRegisters() {
-    const regs = emu.get_registers();
+    updateRegistersCPU();
+    updateRegistersPPU();
+}
+
+function updateRegistersCPU() {
+    const regs = emu.get_registers_cpu();
     for (const reg of ['A', 'X', 'Y', 'PC', 'S', 'P']) {
         const elem = document.getElementById(`reg${reg}`);
         if (elem) {
             elem.textContent = regs[reg].toString(16).toUpperCase().padStart(2, '0');
+        }
+    }
+}
+
+function updateRegistersPPU() {
+    const regs = emu.get_registers_ppu();
+    const registerMap = {
+        'PPUCTRL': 'CTRL',
+        'PPUMASK': 'MASK',
+        'PPUSTATUS': 'STATUS',
+        'OAMADDR': 'OAMADDR',
+        'PPUSCROLL': 'SCROLL',
+        'PPUADDR': 'ADDR',
+        'PPUADDRFULL': 'ADDRFULL'
+    };
+
+    for (const [htmlId, regKey] of Object.entries(registerMap)) {
+        const elem = document.getElementById(`reg${htmlId}`);
+        if (elem && regs[regKey] !== undefined) {
+            // Use padStart(4) for ADDRFULL since it's a 16-bit value
+            const padLength = regKey === 'ADDRFULL' ? 4 : 2;
+            elem.textContent = regs[regKey].toString(16).toUpperCase().padStart(padLength, '0');
         }
     }
 }

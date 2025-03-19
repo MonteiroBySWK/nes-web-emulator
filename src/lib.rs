@@ -8,7 +8,7 @@ mod bus;
 mod nes;
 
 use crate::mapper::Mapper0;
-use crate::{ cpu::CPU, ppu::PPU, rom::{ROM,Mirroring}, bus::BUS , apu::APU};
+use crate::{ cpu::CPU, ppu::PPU, rom::{ ROM, Mirroring }, bus::BUS, apu::APU };
 use wasm_bindgen::prelude::*;
 use web_sys::{ CanvasRenderingContext2d, HtmlCanvasElement };
 use crate::input::Key;
@@ -24,19 +24,22 @@ impl Emulator {
     #[wasm_bindgen(constructor)]
     pub fn new(canvas_id: &str, rom_data: &[u8]) -> Result<Emulator, JsValue> {
         // Log ROM data size and first few bytes
-        web_sys::console::log_1(&format!(
-            "Creating Emulator - ROM size: {}, First bytes: {:?}",
-            rom_data.len(),
-            &rom_data.get(0..16).unwrap_or(&[]).iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<Vec<_>>()
-        ).into());
+        web_sys::console::log_1(
+            &format!(
+                "Creating Emulator - ROM size: {}, First bytes: {:?}",
+                rom_data.len(),
+                &rom_data
+                    .get(0..16)
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<Vec<_>>()
+            ).into()
+        );
 
         // Get canvas and context with error handling
-        let window = web_sys::window()
-            .ok_or_else(|| JsValue::from_str("No window found"))?;
-        let document = window.document()
-            .ok_or_else(|| JsValue::from_str("No document found"))?;
+        let window = web_sys::window().ok_or_else(|| JsValue::from_str("No window found"))?;
+        let document = window.document().ok_or_else(|| JsValue::from_str("No document found"))?;
         let canvas = document
             .get_element_by_id(canvas_id)
             .ok_or_else(|| JsValue::from_str("Canvas not found"))?
@@ -51,14 +54,11 @@ impl Emulator {
         let mut ppu = PPU::new();
 
         web_sys::console::log_1(&"Creating ROM...".into());
-        let rom = ROM::from_bytes(rom_data)
-            .map_err(|e| {
-                web_sys::console::error_1(&format!("ROM creation failed: {:?}", e).into());
-                JsValue::from_str(&format!("ROM error: {}", e))
-            })?;
-    
+        let rom = ROM::from_bytes(rom_data).map_err(|e| {
+            web_sys::console::error_1(&format!("ROM creation failed: {:?}", e).into());
+            JsValue::from_str(&format!("ROM error: {}", e))
+        })?;
 
-    
         // Configure PPU mirroring from ROM
         let mirroring = rom.get_mirroring();
         ppu.set_mirroring(mirroring);
@@ -69,14 +69,13 @@ impl Emulator {
 
         ppu.load_chr_data(&chr_data);
         web_sys::console::log_1(&"CHR data loaded into PPU".into());
-    
 
         web_sys::console::log_1(&"Creating APU...".into());
         let apu = APU::new();
-    
+
         web_sys::console::log_1(&"Creating BUS...".into());
         let mut bus = BUS::new(ppu, rom, apu);
-        
+
         bus.ppu.set_mirroring(bus.rom.get_mirroring());
 
         web_sys::console::log_1(&"Finish BUS...".into());
@@ -107,7 +106,9 @@ impl Emulator {
         web_sys::console::log_1(&format!("PPU Ctrl: {:02x}", self.cpu.bus.ppu.ctrl).into());
         // Obtém o framebuffer (array de pixels em RGB)
         let framebuffer = self.cpu.bus.ppu.get_framebuffer();
-        web_sys::console::log_1(&format!("Framebuffer (primeiros 10 bytes): {:?}", &framebuffer[0..30]).into());
+        web_sys::console::log_1(
+            &format!("Framebuffer (primeiros 10 bytes): {:?}", &framebuffer[0..30]).into()
+        );
         // Converte cada pixel (RGB de 3 bytes) para RGBA (4 bytes, alfa=255)
         let mut rgba_buffer = Vec::with_capacity(256 * 240 * 4);
         for pixel in framebuffer.chunks(3) {
@@ -141,15 +142,69 @@ impl Emulator {
     }
 
     #[wasm_bindgen]
-    pub fn get_registers(&self) -> JsValue {
+    pub fn get_registers_cpu(&self) -> JsValue {
         let regs = js_sys::Object::new();
-        // Assumindo que 'cpu.registers' possui os campos: acc, index_x, index_y, program_counter, stack_pointer, status_register
-        js_sys::Reflect::set(&regs, &JsValue::from_str("A"), &JsValue::from_f64(self.cpu.registers.acc as f64)).unwrap();
-        js_sys::Reflect::set(&regs, &JsValue::from_str("X"), &JsValue::from_f64(self.cpu.registers.index_x as f64)).unwrap();
-        js_sys::Reflect::set(&regs, &JsValue::from_str("Y"), &JsValue::from_f64(self.cpu.registers.index_y as f64)).unwrap();
-        js_sys::Reflect::set(&regs, &JsValue::from_str("PC"), &JsValue::from_f64(self.cpu.registers.program_counter as f64)).unwrap();
-        js_sys::Reflect::set(&regs, &JsValue::from_str("S"), &JsValue::from_f64(self.cpu.registers.stack_pointer as f64)).unwrap();
-        js_sys::Reflect::set(&regs, &JsValue::from_str("P"), &JsValue::from_f64(self.cpu.registers.status_register as f64)).unwrap();
+
+        let (acc, index_x, index_y, program_counter, stack_pointer, status_register) =
+            self.cpu.get_all_registers();
+
+        js_sys::Reflect
+            ::set(&regs, &JsValue::from_str("A"), &JsValue::from_f64(acc as f64))
+            .unwrap();
+        js_sys::Reflect
+            ::set(&regs, &JsValue::from_str("X"), &JsValue::from_f64(index_x as f64))
+            .unwrap();
+        js_sys::Reflect
+            ::set(&regs, &JsValue::from_str("Y"), &JsValue::from_f64(index_y as f64))
+            .unwrap();
+        js_sys::Reflect
+            ::set(&regs, &JsValue::from_str("PC"), &JsValue::from_f64(program_counter as f64))
+            .unwrap();
+        js_sys::Reflect
+            ::set(&regs, &JsValue::from_str("S"), &JsValue::from_f64(stack_pointer as f64))
+            .unwrap();
+        js_sys::Reflect
+            ::set(&regs, &JsValue::from_str("P"), &JsValue::from_f64(status_register as f64))
+            .unwrap();
+        regs.into()
+    }
+
+    #[wasm_bindgen]
+    pub fn get_registers_ppu(&self) -> JsValue {
+        let regs = js_sys::Object::new();
+
+        let (ctrl, mask, status, oam_addr, scroll, addr_low, addr_full) =
+            self.cpu.bus.ppu.get_all_registers();
+
+        // PPU Registers
+        js_sys::Reflect
+            ::set(&regs, &JsValue::from_str("CTRL"), &JsValue::from_f64(ctrl as f64))
+            .unwrap();
+
+        js_sys::Reflect
+            ::set(&regs, &JsValue::from_str("MASK"), &JsValue::from_f64(mask as f64))
+            .unwrap();
+
+        js_sys::Reflect
+            ::set(&regs, &JsValue::from_str("STATUS"), &JsValue::from_f64(status as f64))
+            .unwrap();
+
+        js_sys::Reflect
+            ::set(&regs, &JsValue::from_str("OAMADDR"), &JsValue::from_f64(oam_addr as f64))
+            .unwrap();
+
+        js_sys::Reflect
+            ::set(&regs, &JsValue::from_str("SCROLL"), &JsValue::from_f64(scroll as f64))
+            .unwrap();
+
+        js_sys::Reflect
+            ::set(&regs, &JsValue::from_str("ADDR"), &JsValue::from_f64(addr_low as f64))
+            .unwrap();
+
+        js_sys::Reflect
+            ::set(&regs, &JsValue::from_str("ADDRFULL"), &JsValue::from_f64(addr_full as f64))
+            .unwrap();
+
         regs.into()
     }
 

@@ -128,6 +128,17 @@ impl PPU {
         ppu
     }
 
+    pub fn get_all_registers(&self) -> (u8, u8, u8, u8, u8, u8, u16) {
+        (
+            self.ctrl,          // PPUCTRL ($2000)
+            self.mask,          // PPUMASK ($2001)
+            self.status,        // PPUSTATUS ($2002)
+            self.oam_addr,      // OAMADDR ($2003)
+            self.scroll,        // PPUSCROLL ($2005)
+            self.addr as u8,    // PPUADDR ($2006) - lower byte
+            self.addr          // PPUADDR ($2006) - full 16-bit address
+        )
+    }
     /// Novo método para carregar os dados do CHR-ROM na VRAM
     pub fn load_chr_data(&mut self, data: &[u8]) {
         let len = data.len().min(self.vram.len());

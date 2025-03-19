@@ -63,7 +63,6 @@ pub struct CPU {
 }
 
 impl CPU {
-
     pub fn new(bus: BUS) -> Self {
         CPU {
             registers: Registers {
@@ -94,6 +93,13 @@ impl CPU {
         }
 
         println!("Fetched Opcode: 0x{:X} - PC: {}", opcode, self.registers.program_counter);
+        web_sys::console::log_1(
+            &format!(
+                "Fetched Opcode: 0x{:X} - PC: {}",
+                opcode,
+                self.registers.program_counter
+            ).into()
+        );
         self.instructions.get(&opcode).copied()
     }
 
@@ -101,14 +107,16 @@ impl CPU {
         let op_function: Option<OpcodeFunction> = self.decode();
         if let Some((func, mode)) = op_function {
             // Log para debug
-            web_sys::console::log_1(&format!(
-                "Executing instruction at PC: {:04X}, A: {:02X}, X: {:02X}, Y: {:02X}",
-                self.registers.program_counter,
-                self.registers.acc,
-                self.registers.index_x,
-                self.registers.index_y
-            ).into());
-            
+            web_sys::console::log_1(
+                &format!(
+                    "Executing instruction at PC: {:04X}, A: {:02X}, X: {:02X}, Y: {:02X}",
+                    self.registers.program_counter,
+                    self.registers.acc,
+                    self.registers.index_x,
+                    self.registers.index_y
+                ).into()
+            );
+
             func(self, mode);
         } else {
             println!("Opcode not found");
@@ -119,18 +127,20 @@ impl CPU {
         self.registers.acc = 0;
         self.registers.index_x = 0;
         self.registers.index_y = 0;
-        self.registers.stack_pointer = 0xFD;
+        self.registers.stack_pointer = 0xfd;
         self.registers.status_register = UNUSED | INTERRUPT_DISABLE;
-        
+
         // Lê o endereço de reset do vetor em 0xFFFC
-        let reset_vector = self.read_u16(0xFFFC);
-        web_sys::console::log_1(&format!(
-            "Reset vector: {:04X}, ROM data at vector: {:02X} {:02X}", 
-            reset_vector,
-            self.read(reset_vector),
-            self.read(reset_vector + 1)
-        ).into());
-        
+        let reset_vector = self.read_u16(0xfffc);
+        web_sys::console::log_1(
+            &format!(
+                "Reset vector: {:04X}, ROM data at vector: {:02X} {:02X}",
+                reset_vector,
+                self.read(reset_vector),
+                self.read(reset_vector + 1)
+            ).into()
+        );
+
         self.registers.program_counter = reset_vector;
         self.remaining_cycles = 8;
     }
@@ -142,21 +152,22 @@ impl CPU {
         if self.remaining_cycles == 0 {
             let pc_before = self.registers.program_counter;
             self.execute();
-            
+
             // Debug log
-            web_sys::console::log_1(&format!(
-                "CPU executed at {:04X} -> {:04X}, A:{:02X} X:{:02X} Y:{:02X} P:{:02X}", 
-                pc_before,
-                self.registers.program_counter,
-                self.registers.acc,
-                self.registers.index_x,
-                self.registers.index_y,
-                self.registers.status_register
-            ).into());
-            
+            web_sys::console::log_1(
+                &format!(
+                    "CPU executed at {:04X} -> {:04X}, A:{:02X} X:{:02X} Y:{:02X} P:{:02X}",
+                    pc_before,
+                    self.registers.program_counter,
+                    self.registers.acc,
+                    self.registers.index_x,
+                    self.registers.index_y,
+                    self.registers.status_register
+                ).into()
+            );
+
             // Cada instrução deve definir seus próprios ciclos
             // Por enquanto, usando um valor padrão mais realista
-            self.remaining_cycles = 4;
         }
 
         // Consome um ciclo
@@ -167,11 +178,11 @@ impl CPU {
         // Avança a PPU (3:1 ratio)
         for _ in 0..3 {
             let step_result = self.bus.ppu.step();
-            
+
             if step_result.vblank_nmi {
                 self.trigger_nmi();
             }
-            
+
             if step_result.new_frame {
                 frame_complete = true;
             }
@@ -359,7 +370,7 @@ impl CPU {
         if condition {
             let old_pc = self.registers.program_counter;
             self.registers.program_counter = old_pc.wrapping_add(offset as u16);
-        } 
+        }
     }
 
     fn read_u16(&mut self, addr: u16) -> u16 {
@@ -473,5 +484,16 @@ impl CPU {
             // Desabilita interruptos
             self.registers.status_register |= INTERRUPT_DISABLE;
         }
+    }
+
+    pub fn get_all_registers(&self) -> (u8, u8, u8, u8, u8, u16) {
+        (
+            self.registers.acc,
+            self.registers.index_x,
+            self.registers.index_y,
+            self.registers.stack_pointer,
+            self.registers.status_register,
+            self.registers.program_counter,
+        )
     }
 }
