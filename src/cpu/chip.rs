@@ -132,14 +132,14 @@ impl CPU {
 
         // Lê o endereço de reset do vetor em 0xFFFC
         let reset_vector = self.read_u16(0xfffc);
-        web_sys::console::log_1(
-            &format!(
-                "Reset vector: {:04X}, ROM data at vector: {:02X} {:02X}",
-                reset_vector,
-                self.read(reset_vector),
-                self.read(reset_vector + 1)
-            ).into()
-        );
+        // web_sys::console::log_1(
+        //     &format!(
+        //         "Reset vector: {:04X}, ROM data at vector: {:02X} {:02X}",
+        //         reset_vector,
+        //         self.read(reset_vector),
+        //         self.read(reset_vector + 1)
+        //     ).into()
+        // );
 
         self.registers.program_counter = reset_vector;
         self.remaining_cycles = 8;
@@ -150,24 +150,8 @@ impl CPU {
 
         // Se não há ciclos pendentes, busca e executa uma nova instrução
         if self.remaining_cycles == 0 {
-            let pc_before = self.registers.program_counter;
+            // No need to store pc_before since it's not being used
             self.execute();
-
-            // Debug log
-            web_sys::console::log_1(
-                &format!(
-                    "CPU executed at {:04X} -> {:04X}, A:{:02X} X:{:02X} Y:{:02X} P:{:02X}",
-                    pc_before,
-                    self.registers.program_counter,
-                    self.registers.acc,
-                    self.registers.index_x,
-                    self.registers.index_y,
-                    self.registers.status_register
-                ).into()
-            );
-
-            // Cada instrução deve definir seus próprios ciclos
-            // Por enquanto, usando um valor padrão mais realista
         }
 
         // Consome um ciclo
@@ -486,14 +470,14 @@ impl CPU {
         }
     }
 
-    pub fn get_all_registers(&self) -> (u8, u8, u8, u8, u8, u16) {
+    pub fn get_all_registers(&self) -> (u8, u8, u8, u16, u8, u8) {
         (
             self.registers.acc,
             self.registers.index_x,
             self.registers.index_y,
-            self.registers.stack_pointer,
-            self.registers.status_register,
             self.registers.program_counter,
+            self.registers.status_register,
+            self.registers.stack_pointer,
         )
     }
 }

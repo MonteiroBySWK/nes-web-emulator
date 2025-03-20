@@ -27,6 +27,7 @@ impl ROM {
     }
 
     pub fn from_bytes(contents: &[u8]) -> Result<ROM, Error> {
+        let _header = &contents[0..16];
         // Log ROM size and header for debugging
         web_sys::console::log_1(&format!(
             "Loading ROM - Size: {}, Header: {:?}",
@@ -146,6 +147,11 @@ impl ROM {
             battery_backed,
             mapper_number,
         })
+    }
+
+    fn parse_header(_header: &[u8]) -> Result<(), &'static str> {
+        // Implementation here
+        Ok(())
     }
 
     pub fn read(&self, address: u16) -> u8 {

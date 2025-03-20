@@ -1,71 +1,68 @@
 use crate::rom::Mirroring;
 
 pub struct PPU {
-    // Registradores mapeados
-    pub ctrl: u8,
-    pub mask: u8,
-    status: u8,
-    oam_addr: u8,
-    pub oam_data: [u8; 256],
-    scroll: u8,
-    addr: u16,
-
-    // VRAM interna da PPU (dados gráficos)
-    vram: [u8; 0x4000],
-
-    // Paletas de cores (32 bytes)
-    palette: [u8; 32],
-
-    // OAM secundária (para os 8 sprites do scanline atual)
-    secondary_oam: [u8; 32],
-
-    // Registradores internos auxiliares para scroll e endereço
-    v: u16, // Endereço VRAM atual/ativo
-    t: u16, // Endereço VRAM temporário
-    x: u8, // Fine X scroll
-    w: bool, // Latch de escrita
-
-    // Buffering de leitura VRAM
+    // MMIO registers (memory mapped I/O)
+    pub ctrl: u8,    // $2000 PPUCTRL
+    pub mask: u8,    // $2001 PPUMASK
+    status: u8,      // $2002 PPUSTATUS
+    oam_addr: u8,    // $2003 OAMADDR
+    pub oam_data: [u8; 256], // $2004 OAMDATA array
+    scroll: u8,      // $2005 PPUSCROLL
+    addr: u16,       // $2006 PPUADDR
+    data: u8,        // $2007 PPUDATA
+    
+    // Internal PPU registers
+    v: u16,  // Current VRAM address (15 bits)
+    t: u16,  // Temporary VRAM address (15 bits)
+    x: u8,   // Fine X scroll (3 bits)
+    w: bool, // Write toggle (1 bit)
+    
+    // Internal data buffer for reads
     read_buffer: u8,
 
-    // Contadores de ciclo e scanline
-    pub cycle: u16,
-    pub scanline: u16, // changed from i16 to u16 for consistency with ppu2 timing
+    // Memory
+    vram: [u8; 0x4000],       // VRAM (16KB)
+    palette: [u8; 32],        // Palette RAM (32 bytes)
+    oam: [u8; 256],          // Primary OAM (256 bytes)
+    secondary_oam: [u8; 32],  // Secondary OAM (32 bytes)
 
-    // Frame atual
-    frame: u64,
-
-    // Framebuffer para saída
-    framebuffer: [u8; 256 * 240 * 3], // RGB, 3 bytes por pixel
-
-    // Suporte a interrupções
-    pub nmi_occurred: bool,
-    nmi_output: bool,
-
-    // Dados para renderização
-    bg_next_tile_id: u8,
-    bg_next_tile_attrib: u8,
-    bg_next_tile_lsb: u8,
-    bg_next_tile_msb: u8,
+    // Rendering state
+    cycle: u16,      // 0-340
+    scanline: u16,   // 0-261
+    frame: u64,      // Frame counter
+    
+    // Background shift registers
     bg_shifter_pattern_lo: u16,
     bg_shifter_pattern_hi: u16,
     bg_shifter_attrib_lo: u16,
     bg_shifter_attrib_hi: u16,
+    bg_next_tile_id: u8,
+    bg_next_tile_attrib: u8,
+    bg_next_tile_lsb: u8, 
+    bg_next_tile_msb: u8,
 
-    // Sprite zero hit possível nesse scanline
-    sprite_zero_hit_possible: bool,
-    sprite_zero_being_rendered: bool,
-
-    // Contagem de sprites no scanline atual
+    // Sprite rendering state
     sprite_count: usize,
-
-    // Dados dos sprites para o scanline atual
     sprite_patterns: [u16; 8],
     sprite_positions: [u8; 8],
     sprite_priorities: [u8; 8],
     sprite_indexes: [u8; 8],
+    sprite_zero_hit_possible: bool,
+    sprite_zero_being_rendered: bool,
 
+    // Output
+    framebuffer: [u8; 256 * 240 * 3],
+    
+    // NMI flags
+    nmi_occurred: bool,
+    nmi_output: bool,
+    nmi_previous: bool,
+    nmi_delay: u8,
+
+    // Additional state
     mirroring: Mirroring,
+    odd_frame: bool,  // Novo campo para controlar frames par/ímpar
+    rendering_enabled: bool, // Novo campo para verificar se rendering está ativo
 }
 
 // NOVO: Struct para resultado do avanço, inspirado em ppu2.
@@ -76,67 +73,69 @@ pub struct StepResult {
 
 impl PPU {
     pub fn new() -> Self {
-        let mut ppu = PPU {
+        PPU {
+            // Initialize registers to power-up state
             ctrl: 0,
-            // Para testes, habilite renderização de background e sprites:
-            mask: 0x18, // Habilita background (0x08) e sprites (0x10)
-            status: 0,
+            mask: 0,
+            status: 0xA0, // Bit 7,5 set on powerup
             oam_addr: 0,
-            oam_data: [0; 256],
+            oam_data: [0xFF; 256], // OAM initialized to $FF
             scroll: 0,
             addr: 0,
-            vram: [0; 0x4000],
-            // Inicializa a paleta com valores padrão (exemplo simplificado)
-            palette: [
-                0x0f, 0x30, 0x21, 0x31, 0x0f, 0x30, 0x21, 0x31, 0x0f, 0x30, 0x21, 0x31, 0x0f, 0x30,
-                0x21, 0x31, 0x0f, 0x30, 0x21, 0x31, 0x0f, 0x30, 0x21, 0x31, 0x0f, 0x30, 0x21, 0x31,
-                0x0f, 0x30, 0x21, 0x31,
-            ],
-            secondary_oam: [0; 32],
+            data: 0,
+            
+            // Internal registers
             v: 0,
             t: 0,
             x: 0,
             w: false,
             read_buffer: 0,
+
+            // Memory
+            vram: [0; 0x4000],
+            palette: [0; 32],
+            oam: [0xFF; 256],
+            secondary_oam: [0; 32],
+
+            // Rendering state
             cycle: 0,
             scanline: 0,
             frame: 0,
-            framebuffer: [0; 256 * 240 * 3],
-            nmi_occurred: false,
-            nmi_output: false,
-            bg_next_tile_id: 0,
-            bg_next_tile_attrib: 0,
-            bg_next_tile_lsb: 0,
-            bg_next_tile_msb: 0,
             bg_shifter_pattern_lo: 0,
             bg_shifter_pattern_hi: 0,
             bg_shifter_attrib_lo: 0,
             bg_shifter_attrib_hi: 0,
-            sprite_zero_hit_possible: false,
-            sprite_zero_being_rendered: false,
+            bg_next_tile_id: 0,
+            bg_next_tile_attrib: 0,
+            bg_next_tile_lsb: 0,
+            bg_next_tile_msb: 0,
             sprite_count: 0,
             sprite_patterns: [0; 8],
             sprite_positions: [0; 8],
             sprite_priorities: [0; 8],
             sprite_indexes: [0; 8],
+            sprite_zero_hit_possible: false,
+            sprite_zero_being_rendered: false,
+            framebuffer: [0; 256 * 240 * 3],
+            nmi_occurred: false,
+            nmi_output: false,
+            nmi_previous: false,
+            nmi_delay: 0,
             mirroring: Mirroring::Horizontal,
-        };
-
-        // Se os dados de CHR-ROM estiverem disponíveis, use o método load_chr_data.
-        // Exemplo: ppu.load_chr_data(&chr_data);
-
-        ppu
+            odd_frame: false,
+            rendering_enabled: false,
+        }
     }
 
     pub fn get_all_registers(&self) -> (u8, u8, u8, u8, u8, u8, u16) {
         (
-            self.ctrl,          // PPUCTRL ($2000)
-            self.mask,          // PPUMASK ($2001)
-            self.status,        // PPUSTATUS ($2002)
-            self.oam_addr,      // OAMADDR ($2003)
-            self.scroll,        // PPUSCROLL ($2005)
-            self.addr as u8,    // PPUADDR ($2006) - lower byte
-            self.addr          // PPUADDR ($2006) - full 16-bit address
+            self.ctrl, // PPUCTRL ($2000)
+            self.mask, // PPUMASK ($2001)
+            self.status, // PPUSTATUS ($2002)
+            self.oam_addr, // OAMADDR ($2003)
+            self.scroll, // PPUSCROLL ($2005)
+            self.addr as u8, // PPUADDR ($2006) - lower byte
+            self.addr, // PPUADDR ($2006) - full 16-bit address
         )
     }
     /// Novo método para carregar os dados do CHR-ROM na VRAM
@@ -185,7 +184,9 @@ impl PPU {
     }
 
     pub fn write_register(&mut self, address: u16, value: u8) {
-        web_sys::console::log_1(&format!("PPU Write to address: 0x{:04x}, value: 0x{:02x}", address, value).into());
+        web_sys::console::log_1(
+            &format!("PPU Write to address: 0x{:04x}, value: 0x{:02x}", address, value).into()
+        );
         match address {
             0x2000 => {
                 // PPUCTRL
@@ -203,8 +204,14 @@ impl PPU {
                 }
             }
             0x2001 => {
-                // PPUMASK
+                let old_enabled = self.is_rendering_enabled();
                 self.mask = value;
+                let new_enabled = self.is_rendering_enabled();
+                
+                // Se rendering foi habilitado, atualiza estado
+                if !old_enabled && new_enabled {
+                    self.rendering_enabled = true;
+                }
             }
             0x2002 => {} // PPUSTATUS - Somente leitura
             0x2003 => {
@@ -348,21 +355,19 @@ impl PPU {
     }
 
     fn increment_scroll_y(&mut self) {
-        // Incrementa o Y scroll, com wrap ao redor do nametable
         if (self.mask & 0x08) != 0 || (self.mask & 0x10) != 0 {
-            let mut y = (self.v & 0x7000) >> 12; // Fine Y
+            let mut y = (self.v & 0x7000) >> 12;
             if y == 7 {
                 y = 0;
-                let mut coarse_y = (self.v & 0x03e0) >> 5;
+                let coarse_y = (self.v & 0x03e0) >> 5;
 
-                if coarse_y == 29 {
-                    coarse_y = 0;
-                    self.v ^= 0x0800; // Troca bit de seleção vertical de nametable
+                self.v = if coarse_y == 29 {
+                    (self.v & !0x03e0) ^ 0x0800 // Switch vertical nametable and reset coarse Y
                 } else if coarse_y == 31 {
-                    coarse_y = 0;
+                    self.v & !0x03e0 // Just reset coarse Y
                 } else {
-                    self.v = (self.v & !0x03e0) | ((coarse_y + 1) << 5);
-                }
+                    (self.v & !0x03e0) | (((coarse_y + 1) & 0x1F) << 5) // Increment coarse Y
+                };
 
                 self.v = (self.v & !0x7000) | (y << 12);
             } else {
@@ -401,10 +406,16 @@ impl PPU {
 
     fn update_shifters(&mut self) {
         if (self.mask & 0x08) != 0 {
+            // Background shifters
             self.bg_shifter_pattern_lo <<= 1;
             self.bg_shifter_pattern_hi <<= 1;
             self.bg_shifter_attrib_lo <<= 1;
             self.bg_shifter_attrib_hi <<= 1;
+
+            // Carregar novos bits se estivermos em um ciclo de tile fetch
+            if self.cycle >= 1 && self.cycle <= 256 && self.cycle % 8 == 0 {
+                self.load_background_shifters();
+            }
         }
 
         // Atualiza os shifters dos sprites.
@@ -430,29 +441,134 @@ impl PPU {
             vblank_nmi: false,
         };
 
-        if self.scanline < 240 {
-            // Renderiza scanline visível
-            self.render_scanline();
+        // Atualiza estado de rendering
+        self.rendering_enabled = self.is_rendering_enabled();
+
+        // Manejo especial do último ciclo do frame para frames ímpares
+        if self.rendering_enabled && self.odd_frame && self.scanline == 261 && self.cycle == 339 {
+            self.cycle = 0;
+            self.scanline = 0;
+            self.odd_frame = !self.odd_frame;
+            self.frame += 1;
+            result.new_frame = true;
+            return result;
         }
 
-        self.scanline += 1;
-        self.cycle = 0;
+        // Add actual pixel rendering during visible scanlines
+        if self.scanline < 240 && self.cycle > 0 && self.cycle <= 256 {
+            self.render_pixel();
+        }
 
-        if self.scanline == 241 {
-            self.status |= 0x80; // seta a flag de VBlank
+        // Pre-render scanline (261)
+        if self.scanline == 261 {
+            if self.cycle == 1 {
+                self.status &= !0xE0; // Clear VBlank, sprite 0 hit, sprite overflow
+                self.nmi_occurred = false;
+            }
+
+            // Transferência vertical durante pré-render
+            if self.cycle >= 280 && self.cycle <= 304 && self.rendering_enabled {
+                self.transfer_address_y();
+            }
+        }
+
+        // Clear frame at start of new frame
+        if self.scanline == 0 && self.cycle == 0 {
+            // Clear framebuffer
+            self.framebuffer = [0; 256 * 240 * 3];
+        }
+
+        // Scanlines visíveis (0-239) e pré-render
+        if self.scanline <= 239 || self.scanline == 261 {
+            // Ciclos para fetch de tiles e renderização
+            match self.cycle {
+                0 => {} // Idle cycle
+                1..=256 => {
+                    self.update_shifters();
+                    
+                    match (self.cycle - 1) % 8 {
+                        0 => self.fetch_nametable_byte(),
+                        2 => self.fetch_attribute_byte(),
+                        4 => self.fetch_pattern_low(),
+                        6 => self.fetch_pattern_high(),
+                        7 => self.increment_scroll_x(),
+                        _ => {}
+                    }
+
+                    if self.cycle == 256 {
+                        self.increment_scroll_y();
+                    }
+                }
+                257 => {
+                    self.transfer_address_x();
+                    if self.scanline < 240 {
+                        self.load_sprites_for_next_scanline();
+                    }
+                }
+                321..=336 => {
+                    self.update_shifters();
+                    
+                    match (self.cycle - 321) % 8 {
+                        0 => self.fetch_nametable_byte(),
+                        2 => self.fetch_attribute_byte(),
+                        4 => self.fetch_pattern_low(),
+                        6 => self.fetch_pattern_high(),
+                        _ => {}
+                    }
+                }
+                337..=340 => { /* Dois NT bytes dummy */ }
+                _ => {}
+            }
+        }
+
+        // VBlank (scanlines 241-260)
+        if self.scanline == 241 && self.cycle == 1 {
+            self.status |= 0x80; // Set VBlank flag
             self.nmi_occurred = true;
             if self.nmi_output {
                 result.vblank_nmi = true;
             }
-        } else if self.scanline == 261 {
-            // Final do frame; reinicia scanline e atualiza frame
-            self.scanline = 0;
-            self.frame += 1;
-            self.status &= 0x1F; // limpa flags de VBlank e Sprite
-            result.new_frame = true;
+        }
+
+        // Avança ciclo/scanline
+        self.cycle += 1;
+        if self.cycle > 340 {
+            self.cycle = 0;
+            self.scanline += 1;
+            if self.scanline > 261 {
+                self.scanline = 0;
+                self.odd_frame = !self.odd_frame;
+                self.frame += 1;
+                result.new_frame = true;
+            }
         }
 
         result
+    }
+
+    fn fetch_nametable_byte(&mut self) {
+        let addr = 0x2000 | (self.v & 0x0FFF);
+        self.bg_next_tile_id = self.read_ppu_memory(addr);
+    }
+
+    fn fetch_attribute_byte(&mut self) {
+        let addr = 0x23C0 | (self.v & 0x0C00) | ((self.v >> 4) & 0x38) | ((self.v >> 2) & 0x07);
+        let shift = ((self.v >> 4) & 4) | (self.v & 2);
+        self.bg_next_tile_attrib = ((self.read_ppu_memory(addr) >> shift) & 3) * 0x55;
+    }
+
+    fn fetch_pattern_low(&mut self) {
+        let fine_y = (self.v >> 12) & 7;
+        let table = ((self.ctrl & 0x10) >> 4) as u16;
+        let addr = (table << 12) | ((self.bg_next_tile_id as u16) << 4) | fine_y;
+        self.bg_next_tile_lsb = self.read_ppu_memory(addr);
+    }
+
+    fn fetch_pattern_high(&mut self) {
+        let fine_y = (self.v >> 12) & 7;
+        let table = ((self.ctrl & 0x10) >> 4) as u16;
+        let addr = (table << 12) | ((self.bg_next_tile_id as u16) << 4) | fine_y | 8;
+        self.bg_next_tile_msb = self.read_ppu_memory(addr);
     }
 
     // Preparação de sprites para o próximo scanline
@@ -477,7 +593,7 @@ impl PPU {
             let sprite_attr = self.oam_data[i * 4 + 2];
             let sprite_x = self.oam_data[i * 4 + 3];
 
-            let diff = self.scanline as i16 - sprite_y;
+            let diff = (self.scanline as i16) - sprite_y;
 
             // Verifica se o sprite está no próximo scanline
             if diff >= 0 && diff < sprite_height {
@@ -542,96 +658,67 @@ impl PPU {
 
     // Função para renderizar um pixel na posição atual (ciclo e scanline)
     fn render_pixel(&mut self) {
-        let x = self.cycle - 1;
+        let x = (self.cycle - 1) as usize;
         let y = self.scanline as usize;
-
-        let mut bg_pixel = 0u8;
-        let mut bg_palette = 0u8;
-
-        let mut fg_pixel = 0u8;
-        let mut fg_palette = 0u8;
-        let mut fg_priority = 0u8;
-        let mut fg_is_sprite_zero = false;
-
-        // ---------- Background ----------
-        if (self.mask & 0x08) != 0 {
-            // Calcula o "mux" com base na posição fina (self.x)
-            let mux = 0x8000 >> self.x;
-
-            let p0 = (self.bg_shifter_pattern_lo & mux) != 0;
-            let p1 = (self.bg_shifter_pattern_hi & mux) != 0;
-            bg_pixel = ((p1 as u8) << 1) | (p0 as u8);
-
-            let a0 = (self.bg_shifter_attrib_lo & mux) != 0;
-            let a1 = (self.bg_shifter_attrib_hi & mux) != 0;
-            bg_palette = ((a1 as u8) << 1) | (a0 as u8);
+        
+        // Skip if outside visible area
+        if x >= 256 || y >= 240 {
+            return;
         }
 
-        // ---------- Sprites ----------
-        if (self.mask & 0x10) != 0 {
+        let mut pixel = 0u8;
+        let mut palette = 0u8;
+
+        // Background rendering
+        if (self.mask & 0x08) != 0 && (x >= 8 || (self.mask & 0x02) != 0) {
+            let bit_mux = 0x8000 >> self.x;
+            
+            let p0 = if (self.bg_shifter_pattern_lo & bit_mux) != 0 { 1 } else { 0 };
+            let p1 = if (self.bg_shifter_pattern_hi & bit_mux) != 0 { 2 } else { 0 };
+            pixel = p0 | p1;
+
+            let pal0 = if (self.bg_shifter_attrib_lo & bit_mux) != 0 { 1 } else { 0 };
+            let pal1 = if (self.bg_shifter_attrib_hi & bit_mux) != 0 { 2 } else { 0 };
+            palette = pal0 | pal1;
+        }
+
+        // Sprite rendering
+        if (self.mask & 0x10) != 0 && (x >= 8 || (self.mask & 0x04) != 0) {
             for i in 0..self.sprite_count {
-                let sprite_x = self.sprite_positions[i] as u16;
-
-                if sprite_x <= x && x < sprite_x + 8 {
+                let sprite_x = self.sprite_positions[i];
+                let offset = x as i16 - sprite_x as i16;
+                
+                if offset >= 0 && offset < 8 {
                     let pattern = self.sprite_patterns[i];
-                    let offset = x - sprite_x;
-                    let p0 = (pattern >> offset) & 0x01;
-                    // Para sprites, se houver suporte para flip vertical/horizontal, ajuste a lógica aqui.
-                    let p1 = (pattern >> (offset + 8)) & 0x01; 
-                    let sprite_pixel = (p1 << 1) | p0;
+                    let sprite_pixel = ((pattern >> (7 - offset)) & 0x01) |
+                                     (((pattern >> 8) >> (7 - offset)) & 0x01) << 1;
 
-                    // Se o pixel não é transparente (não zero)
                     if sprite_pixel != 0 {
-                        fg_pixel = sprite_pixel as u8;
-                        // A paleta para sprites começa na posição 4 na paleta geral
-                        fg_palette = 4 + (self.secondary_oam[i * 4 + 2] & 0x03);
-                        fg_priority = self.sprite_priorities[i];
-                        if i == 0 {
-                            fg_is_sprite_zero = true;
+                        let sprite_palette = 4 + ((self.secondary_oam[i * 4 + 2] & 0x03) as u8);
+                        let priority = (self.secondary_oam[i * 4 + 2] & 0x20) == 0;
+
+                        // Sprite 0 hit detection
+                        if i == 0 && pixel != 0 && x < 255 {
+                            self.status |= 0x40;
                         }
-                        break;
+
+                        // Render sprite pixel if it has priority or background is transparent
+                        if priority || pixel == 0 {
+                            pixel = sprite_pixel as u8;
+                            palette = sprite_palette;
+                        }
                     }
                 }
             }
         }
 
-        // ---------- Composição final ----------
-        let mut final_pixel = 0u8;
-        let mut final_palette = 0u8;
+        // Get color from palette
+        let palette_addr = if pixel == 0 { 0 } else { (palette << 2) | pixel };
+        let color_idx = self.read_ppu_memory(0x3F00 | palette_addr as u16) & 0x3F;
+        let (r, g, b) = PPU::convert_color(color_idx);
 
-        if bg_pixel == 0 && fg_pixel == 0 {
-            // Cor de fundo (normalmente definida em 0x3F00)
-            final_pixel = 0;
-            final_palette = 0;
-        } else if bg_pixel == 0 && fg_pixel > 0 {
-            final_pixel = fg_pixel;
-            final_palette = fg_palette;
-        } else if bg_pixel > 0 && fg_pixel == 0 {
-            final_pixel = bg_pixel;
-            final_palette = bg_palette;
-        } else {
-            // Ambos presentes; resolver prioridade
-            if fg_priority == 0 {
-                final_pixel = fg_pixel;
-                final_palette = fg_palette;
-            } else {
-                final_pixel = bg_pixel;
-                final_palette = bg_palette;
-            }
-
-            // Detecta Sprite Zero Hit, se aplicável
-            if fg_is_sprite_zero && bg_pixel != 0 && fg_pixel != 0 && x < 255 {
-                self.status |= 0x40;
-            }
-        }
-
-        // Converter para RGB usando a paleta (endereço da paleta = 0x3F00 + (paleta*4 + pixel))
-        let palette_addr = 0x3f00 + ((final_palette as u16) * 4 + (final_pixel as u16));
-        let palette_value = self.read_ppu_memory(palette_addr);
-        let (r, g, b) = self.convert_palette_to_rgb(palette_value);
-
-        // Armazena o pixel no framebuffer (3 bytes RGB)
-        let pixel_pos = (y * 256 + (x as usize)) * 3;
+        // Write to framebuffer
+        let pixel_pos = (y * 256 + x) * 3;
         if pixel_pos + 2 < self.framebuffer.len() {
             self.framebuffer[pixel_pos] = r;
             self.framebuffer[pixel_pos + 1] = g;
@@ -639,90 +726,38 @@ impl PPU {
         }
     }
 
-    // Converte valor da paleta para RGB
-    fn convert_palette_to_rgb(&self, palette_value: u8) -> (u8, u8, u8) {
-        // Tabela de cores 2C02 (simplificada)
-        // Na prática, uma tabela completa de 64 entradas seria usada
-        match palette_value & 0x3f {
-            0x00 => (84, 84, 84), // Cinza escuro
-            0x01 => (0, 30, 116), // Azul escuro
-            0x02 => (8, 16, 144), // Roxo escuro
-            0x03 => (48, 0, 136), // Roxo
-            0x04 => (68, 0, 100), // Roxo avermelhado
-            0x05 => (92, 0, 48), // Vermelho escuro
-            0x06 => (84, 4, 0), // Marrom escuro
-            0x07 => (60, 24, 0), // Marrom
-            0x08 => (32, 42, 0), // Verde escuro
-            0x09 => (8, 58, 0), // Verde
-            0x0a => (0, 64, 0), // Verde oliva
-            0x0b => (0, 60, 0), // Verde claro
-            0x0c => (0, 50, 60), // Ciano escuro
-            0x0d => (0, 0, 0), // Preto
-            0x0e => (0, 0, 0), // Preto
-            0x0f => (0, 0, 0), // Preto
+    // New color conversion function with full 64-color palette
+    fn convert_color(value: u8) -> (u8, u8, u8) {
+        const NES_PALETTE: [(u8, u8, u8); 64] = [
+            (84,84,84),    (0,30,116),    (8,16,144),    (48,0,136),
+            (68,0,100),    (92,0,48),     (84,4,0),      (60,24,0),
+            (32,42,0),     (8,58,0),      (0,64,0),      (0,60,0),
+            (0,50,60),     (0,0,0),       (0,0,0),       (0,0,0),
+            
+            (152,150,152), (8,76,196),    (48,50,236),   (92,30,228),
+            (136,20,176),  (160,20,100),  (152,34,32),   (120,60,0),
+            (84,90,0),     (40,114,0),    (8,124,0),     (0,118,40),
+            (0,102,120),   (0,0,0),       (0,0,0),       (0,0,0),
+            
+            (236,238,236), (76,154,236),  (120,124,236), (176,98,236),
+            (228,84,236),  (236,88,180),  (236,106,100), (212,136,32),
+            (160,170,0),   (116,196,0),   (76,208,32),   (56,204,108),
+            (56,180,204),  (60,60,60),    (0,0,0),       (0,0,0),
+            
+            (236,238,236), (168,204,236), (188,188,236), (212,178,236),
+            (236,174,236), (236,174,212), (236,180,176), (228,196,144),
+            (204,210,120), (180,222,120), (168,226,144), (152,226,180),
+            (160,214,228), (160,162,160), (0,0,0),       (0,0,0),
+        ];
 
-            0x10 => (152, 150, 152), // Cinza claro
-            0x11 => (8, 76, 196), // Azul
-            0x12 => (48, 50, 236), // Azul claro
-            0x13 => (92, 30, 228), // Roxo claro
-            0x14 => (136, 20, 176), // Rosa
-            0x15 => (160, 20, 100), // Vermelho
-            0x16 => (152, 34, 32), // Vermelho claro
-            0x17 => (120, 60, 0), // Laranja
-            0x18 => (84, 90, 0), // Amarelo escuro
-            0x19 => (40, 114, 0), // Verde limão
-            0x1a => (8, 124, 0), // Verde claro
-            0x1b => (0, 118, 40), // Verde azulado
-            0x1c => (0, 102, 120), // Ciano
-            0x1d => (0, 0, 0), // Preto
-            0x1e => (0, 0, 0), // Preto
-            0x1f => (0, 0, 0), // Preto
-
-            0x20 => (236, 238, 236), // Branco
-            0x21 => (76, 154, 236), // Azul claro
-            0x22 => (120, 124, 236), // Azul lavanda
-            0x23 => (176, 98, 236), // Roxo claro
-            0x24 => (228, 84, 236), // Rosa claro
-            0x25 => (236, 88, 180), // Rosa salmão
-            0x26 => (236, 106, 100), // Coral
-            0x27 => (212, 136, 32), // Laranja
-            0x28 => (160, 170, 0), // Amarelo
-            0x29 => (116, 196, 0), // Verde limão
-            0x2a => (76, 208, 32), // Verde claro
-            0x2b => (56, 204, 108), // Verde esmeralda
-            0x2c => (56, 180, 204), // Ciano claro
-            0x2d => (60, 60, 60), // Cinza
-            0x2e => (0, 0, 0), // Preto
-            0x2f => (0, 0, 0), // Preto
-
-            0x30 => (236, 238, 236), // Branco
-            0x31 => (168, 204, 236), // Azul pastel
-            0x32 => (188, 188, 236), // Lavanda pastel
-            0x33 => (212, 178, 236), // Roxo pastel
-            0x34 => (236, 174, 236), // Rosa pastel
-            0x35 => (236, 174, 212), // Rosa claro pastel
-            0x36 => (236, 180, 176), // Coral pastel
-            0x37 => (228, 196, 144), // Laranja pastel
-            0x38 => (204, 210, 120), // Amarelo pastel
-            0x39 => (180, 222, 120), // Verde limão pastel
-            0x3a => (168, 226, 144), // Verde pastel
-            0x3b => (152, 226, 180), // Verde menta pastel
-            0x3c => (160, 214, 228), // Ciano pastel
-            0x3d => (160, 162, 160), // Cinza claro
-            0x3e => (0, 0, 0), // Preto
-            0x3f => (0, 0, 0), // Preto
-
-            _ => (0, 0, 0), // Default (preto)
-        }
+        let index = (value & 0x3F) as usize;
+        NES_PALETTE[index]
     }
 
     // Métodos públicos para debug e interface
 
     // Obtém o framebuffer atual
     pub fn get_framebuffer(&self) -> &[u8] {
-        // Debug the first few pixels
-        web_sys::console::log_1(&format!("First 10 pixels: {:?}", &self.framebuffer[..30]).into());
-
         &self.framebuffer
     }
 
@@ -739,44 +774,33 @@ impl PPU {
     ) -> [u8; 128 * 128 * 3] {
         let mut buffer = [0u8; 128 * 128 * 3];
 
-        // Offset da pattern table
-        let pattern_table_addr = (pattern_table_index * 0x1000) as u16;
-
-        // Renderizar cada tile (16x16 tiles de 8x8 pixels)
         for tile_y in 0..16 {
             for tile_x in 0..16 {
                 let tile_index = tile_y * 16 + tile_x;
-                let tile_addr = pattern_table_addr + (tile_index as u16) * 16;
+                let tile_addr = (pattern_table_index * 0x1000) as u16 + (tile_index as u16) * 16;
 
-                // Renderizar um tile 8x8
                 for row in 0..8 {
-                    // Buscar os bits para esta linha do tile
                     let plane0 = self.read_ppu_memory(tile_addr + row);
                     let plane1 = self.read_ppu_memory(tile_addr + row + 8);
 
-                    // Processar cada pixel na linha
                     for col in 0..8 {
                         let bit0 = (plane0 >> (7 - col)) & 1;
                         let bit1 = (plane1 >> (7 - col)) & 1;
                         let pixel = (bit1 << 1) | bit0;
 
-                        // Calcular o endereço da paleta
-                        let palette_addr = 0x3f00 + ((palette as u16) * 4 + (pixel as u16));
-                        let color_index = self.read_ppu_memory(palette_addr);
+                        let palette_addr = 0x3f00 | ((palette as u16) << 2) | (pixel as u16);
+                        let color_index = self.read_ppu_memory(palette_addr & 0x3FFF);
 
-                        // Converter para RGB
-                        let (r, g, b) = self.convert_palette_to_rgb(color_index);
+                        let (r, g, b) = PPU::convert_color(color_index);
 
-                        // Calcular posição no buffer de saída
                         let x = tile_x * 8 + col;
                         let y = tile_y * 8 + row;
-                        let pos = (y * 128 + x) * 3;
+                        let pos = ((y * 128 + x) * 3) as usize;
 
-                        // Armazenar o pixel no buffer
-                        if pos + 2 < (buffer.len() as u16) {
-                            buffer[pos as usize] = r;
-                            buffer[(pos + 1) as usize] = g;
-                            buffer[(pos + 2) as usize] = b;
+                        if pos + 2 < buffer.len() {
+                            buffer[pos] = r;
+                            buffer[pos + 1] = g;
+                            buffer[pos + 2] = b;
                         }
                     }
                 }
@@ -805,46 +829,38 @@ impl PPU {
                         // Lê o atributo para determinar a paleta
                         let attr_x = tile_x / 4;
                         let attr_y = tile_y / 4;
-                        let attr_addr = nt_addr + 0x3c0 + attr_y * 8 + attr_x;
-                        let attr = self.read_ppu_memory(attr_addr as u16);
-
-                        // Determina qual quadrante do atributo usar
-                        let quad_x = (tile_x % 4) / 2;
-                        let quad_y = (tile_y % 4) / 2;
-                        let quad = quad_y * 2 + quad_x;
-                        let palette_index = (attr >> (quad * 2)) & 0x03;
-
-                        // Busca os dados do tile da pattern table
-                        let pattern_table = (self.ctrl & 0x10) >> 4;
-                        let tile_addr = (pattern_table as u16) * 0x1000 + (tile_index as u16) * 16;
+                        let attr_addr = (nt_addr + 0x3C0 + attr_y * 8 + attr_x) as u16;
+                        let attr_byte = self.read_ppu_memory(attr_addr);
+                        
+                        // Determina qual parte do byte de atributo usar
+                        let attr_shift = ((tile_y % 4) / 2) * 4 + ((tile_x % 4) / 2) * 2;
+                        let palette_index = (attr_byte >> attr_shift) & 0x03;
 
                         // Renderiza o tile 8x8
+                        let pattern_table = (self.ctrl & 0x10) != 0;
+                        let tile_addr = (if pattern_table { 0x1000 } else { 0 }) + tile_index as u16 * 16;
+
                         for row in 0..8 {
-                            let plane0 = self.read_ppu_memory(tile_addr + (row as u16));
-                            let plane1 = self.read_ppu_memory(tile_addr + (row as u16) + 8);
+                            let plane0 = self.read_ppu_memory(tile_addr + row);
+                            let plane1 = self.read_ppu_memory(tile_addr + row + 8);
 
                             for col in 0..8 {
                                 let bit0 = (plane0 >> (7 - col)) & 1;
                                 let bit1 = (plane1 >> (7 - col)) & 1;
                                 let pixel = (bit1 << 1) | bit0;
 
-                                // Seleciona a cor da paleta
-                                let palette_addr =
-                                    0x3f00 + ((palette_index as u16) * 4 + (pixel as u16));
+                                let palette_addr = 0x3f00 + (palette_index * 4 + pixel) as u16;
                                 let color_index = self.read_ppu_memory(palette_addr);
+                                let (r, g, b) = PPU::convert_color(color_index);
 
-                                // Converte para RGB
-                                let (r, g, b) = self.convert_palette_to_rgb(color_index);
-
-                                // Calcula a posição no buffer
                                 let x = nt_x * 256 + tile_x * 8 + col;
                                 let y = nt_y * 240 + tile_y * 8 + row;
                                 let pos = (y * 512 + x) * 3;
 
-                                if pos + 2 < buffer.len() {
-                                    buffer[pos] = r;
-                                    buffer[pos + 1] = g;
-                                    buffer[pos + 2] = b;
+                                if pos + 2 < buffer.len() as u16 {
+                                    buffer[pos as usize] = r;
+                                    buffer[(pos + 1) as usize] = g;
+                                    buffer[(pos + 2) as usize] = b;
                                 }
                             }
                         }
@@ -854,6 +870,43 @@ impl PPU {
         }
 
         buffer
+    }
+
+    pub fn debug_pattern_tables(&self) {
+        for addr in 0..0x2000 {
+            if self.vram[addr] != 0 {
+                web_sys::console::log_1(&format!(
+                    "Pattern table data at {:04X}: {:02X}",
+                    addr,
+                    self.vram[addr]
+                ).into());
+            }
+        }
+    }
+
+    pub fn debug_nametables(&self) {
+        for nt in 0..4 {
+            let base = 0x2000 + (nt * 0x400);
+            let mut non_zero = false;
+            for offset in 0..0x400 {
+                if self.vram[base + offset] != 0 {
+                    non_zero = true;
+                    web_sys::console::log_1(&format!(
+                        "NT{} data at {:04X}: {:02X}",
+                        nt,
+                        base + offset,
+                        self.vram[base + offset]
+                    ).into());
+                }
+            }
+            if !non_zero {
+                web_sys::console::log_1(&format!("Nametable {} is empty", nt).into());
+            }
+        }
+    }
+
+    fn is_rendering_enabled(&self) -> bool {
+        (self.mask & 0x18) != 0 // Verifica se background ou sprites estão habilitados
     }
 }
 

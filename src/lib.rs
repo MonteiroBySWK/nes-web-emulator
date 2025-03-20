@@ -7,8 +7,7 @@ mod mapper;
 mod bus;
 mod nes;
 
-use crate::mapper::Mapper0;
-use crate::{ cpu::CPU, ppu::PPU, rom::{ ROM, Mirroring }, bus::BUS, apu::APU };
+use crate::{ cpu::CPU, ppu::PPU, rom::ROM, bus::BUS, apu::APU };
 use wasm_bindgen::prelude::*;
 use web_sys::{ CanvasRenderingContext2d, HtmlCanvasElement };
 use crate::input::Key;
@@ -45,10 +44,17 @@ impl Emulator {
             .ok_or_else(|| JsValue::from_str("Canvas not found"))?
             .dyn_into::<HtmlCanvasElement>()?;
 
+        // Set canvas size and scaling
+        canvas.set_width(256);
+        canvas.set_height(240);
+        
         let context = canvas
             .get_context("2d")?
             .ok_or_else(|| JsValue::from_str("Failed to get 2d context"))?
             .dyn_into::<CanvasRenderingContext2d>()?;
+
+        // Disable image smoothing for sharp pixels
+        context.set_image_smoothing_enabled(false);
 
         // Initialize components with detailed error handling
         let mut ppu = PPU::new();
@@ -67,6 +73,8 @@ impl Emulator {
         let chr_data = rom.mapper.get_chr_rom(); // Você precisará implementar este método em sua struct ROM
         web_sys::console::log_1(&format!("CHR data size: {}", chr_data.len()).into());
 
+
+        web_sys::console::log_1(&format!("CHR: {:?}", chr_data).into());
         ppu.load_chr_data(&chr_data);
         web_sys::console::log_1(&"CHR data loaded into PPU".into());
 
@@ -97,48 +105,40 @@ impl Emulator {
         let frame_complete = self.cpu.clock();
 
         if frame_complete {
-            self.render();
+            self.render().unwrap_or_else(|e| {
+                web_sys::console::error_1(&format!("Render error: {:?}", e).into());
+            });
         }
     }
 
-    fn render(&self) {
-        web_sys::console::log_1(&format!("PPU Mask: {:02x}", self.cpu.bus.ppu.mask).into());
-        web_sys::console::log_1(&format!("PPU Ctrl: {:02x}", self.cpu.bus.ppu.ctrl).into());
-        // Obtém o framebuffer (array de pixels em RGB)
+    fn render(&self) -> Result<(), JsValue> {
         let framebuffer = self.cpu.bus.ppu.get_framebuffer();
-        web_sys::console::log_1(
-            &format!("Framebuffer (primeiros 10 bytes): {:?}", &framebuffer[0..30]).into()
-        );
-        // Converte cada pixel (RGB de 3 bytes) para RGBA (4 bytes, alfa=255)
-        let mut rgba_buffer = Vec::with_capacity(256 * 240 * 4);
-        for pixel in framebuffer.chunks(3) {
-            rgba_buffer.push(pixel[0]);
-            rgba_buffer.push(pixel[1]);
-            rgba_buffer.push(pixel[2]);
-            rgba_buffer.push(255); // Alfa fixo em 255 (opaco)
+        
+        web_sys::console::log_1(&format!("Rendering frame, buffer size: {}", framebuffer.len()).into());
+        
+        let mut rgba_buffer = vec![0; 256 * 240 * 4];
+        
+        for i in 0..(256 * 240) {
+            let src = i * 3;
+            let dst = i * 4;
+            if src + 2 < framebuffer.len() && dst + 3 < rgba_buffer.len() {
+                rgba_buffer[dst] = framebuffer[src];
+                rgba_buffer[dst + 1] = framebuffer[src + 1];
+                rgba_buffer[dst + 2] = framebuffer[src + 2];
+                rgba_buffer[dst + 3] = 255;
+            }
         }
 
-        // Cria um objeto ImageData usando o buffer RGBA e o tamanho do canvas
-        match
-            web_sys::ImageData::new_with_u8_clamped_array_and_sh(
-                wasm_bindgen::Clamped(&rgba_buffer),
-                256,
-                240
-            )
-        {
-            Ok(image_data) => {
-                if let Err(e) = self.context.put_image_data(&image_data, 0.0, 0.0) {
-                    web_sys::console::error_1(
-                        &format!("Erro ao colocar dados de imagem: {:?}", e).into()
-                    );
-                }
-            }
-            Err(e) => {
-                web_sys::console::error_1(
-                    &format!("Erro ao criar dados de imagem: {:?}", e).into()
-                );
-            }
-        }
+        let image_data = web_sys::ImageData::new_with_u8_clamped_array_and_sh(
+            wasm_bindgen::Clamped(&rgba_buffer),
+            256,
+            240
+        )?;
+
+        self.context.clear_rect(0.0, 0.0, 256.0, 240.0);
+        self.context.put_image_data(&image_data, 0.0, 0.0)?;
+
+        Ok(())
     }
 
     #[wasm_bindgen]
